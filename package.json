@@ -1,0 +1,29 @@
+{
+  "name": "yukigo-haskell-parser",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "nearleyc ./src/parser/grammar.ne -o ./src/parser/grammar.ts && tsc",
+    "prepare": "npm run build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^24.2.0",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "moo": "^0.5.2",
+    "moo-ignore": "^2.5.3",
+    "nearley": "^2.20.1",
+    "yukigo-core": "file:../yukigo-core"
+  }
+}
