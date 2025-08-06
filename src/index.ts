@@ -17,7 +17,6 @@ export class YukigoHaskellParser implements YukigoParser {
     const parser = new nearley.Parser(nearley.Grammar.fromCompiled(grammar));
     parser.feed(code);
     parser.finish();
-    console.log(parser);
     if (parser.results.length > 1) {
       this.errors.push("Too much ambiguity. Output not generated.");
       throw Error("Too much ambiguity. Output not generated.");

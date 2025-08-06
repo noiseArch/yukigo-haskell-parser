@@ -249,7 +249,6 @@ function parsePrimary(token: Token): Primitive {
     }
     case "list": {
       const list = token as ListToken;
-      console.log(list)
       const listPrimitive: ListPrimitive = {
         type: "YuList",
         elements: list.body,

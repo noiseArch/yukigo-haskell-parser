@@ -237,7 +237,6 @@ export class TypeChecker {
         }
       },
     });
-    console.log(this.signatureMap);
   }
 
   private inferType(
