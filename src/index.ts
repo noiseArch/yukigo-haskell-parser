@@ -15,8 +15,15 @@ export class YukigoHaskellParser implements YukigoParser {
 
   public parse(code: string): ASTGrouped {
     const parser = new nearley.Parser(nearley.Grammar.fromCompiled(grammar));
-    parser.feed(code);
-    parser.finish();
+    try {
+      parser.feed(code);
+      parser.finish();
+    } catch (error) {
+      const token = error.token;
+      const message = `Unexpected '${token.type}' token '${token.value}' at line ${token.line} col ${token.col}.`;
+      this.errors.push(message);
+      throw Error(message);
+    }
     if (parser.results.length > 1) {
       this.errors.push("Too much ambiguity. Output not generated.");
       throw Error("Too much ambiguity. Output not generated.");
