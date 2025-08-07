@@ -18,12 +18,6 @@ import {
 const filter = d => {
     return d.filter((token) => token !== null);
 };
-HSLexer.next = (next => () => {
-    let tok;
-    while ((tok = next.call(HSLexer)) && (tok.type === "comment")) {}
-    //console.log(tok);
-    return tok;
-})(HSLexer.next);
 
 %}
 @preprocessor typescript
@@ -31,9 +25,9 @@ HSLexer.next = (next => () => {
 
 program -> (declaration):* {% (d) => d[0].map(x => x[0]).filter(x => x !== null) %}
 
-declaration -> ((function_declaration) | (function_type_declaration (%NL | %EOF)) | (type_declaration (%NL | %EOF)) | (data_declaration (%NL | %EOF)) | (emptyline)) {% (d) => d[0][0][0] %}
+declaration -> ((function_declaration) | (function_type_declaration _ EOL) | (type_declaration _ EOL) | (data_declaration _ EOL) | (emptyline)) {% (d) =>  d[0][0][0] %}
 
-emptyline -> _ (%NL | %EOF) {% (d) => null %}
+emptyline -> _ EOL {% (d) => null %}
 
 expression -> apply_operator {% (d) => parseExpression(d[0]) %}
 
@@ -127,15 +121,15 @@ field -> variable _ %typeEquals _ type {% (d) => ({type: "Field", name: d[0], va
 
 # Function rules
 
-function_type_declaration -> variable _ %typeEquals _ type _ {% (d) => parseFunctionType([d[0], d[4]]) %}
+function_type_declaration -> variable _ %typeEquals _ type {% (d) => parseFunctionType([d[0], d[4]]) %}
 
 function_declaration -> 
     variable __ parameter_list:? _ (%NL __):? guarded_rhs {% (d) => parseFunction({type: "function", name: d[0], params: d[2] ? d[2] : [], body: d[5], return: d[5], attributes: ["GuardedBody"]}) %}
-    | variable __ parameter_list:? _ %assign _ (%NL __):? expression _ (%NL | %EOF) {% (d) => parseFunction({type: "function", name: d[0], params: d[2] ? d[2] : [], body: d[7], return: d[7], attributes: ["UnguardedBody"]}) %}
+    | variable __ parameter_list:? _ %assign _ (%NL __):? expression _ EOL {% (d) => parseFunction({type: "function", name: d[0], params: d[2] ? d[2] : [], body: d[7], return: d[7], attributes: ["UnguardedBody"]}) %}
 
 guarded_rhs -> guarded_branch:+ {% (d) => d[0] %}
 
-guarded_branch -> "|" _ expression _ "=" _ expression _ ((%NL __) | %NL | %EOF) {% (d) => ({ condition: d[2], body: d[6], return: d[6] }) %}
+guarded_branch -> "|" _ expression _ "=" _ expression _ ((%NL __) | EOL) {% (d) => ({ condition: d[2], body: d[6], return: d[6] }) %}
 
 parameter_list -> pattern (__ pattern):* {% (d) => [d[0], ...d[1].map(x => x[1])] %}
 
@@ -301,3 +295,5 @@ comparison_operator ->
 _ -> %WS:*
 
 __ -> %WS:+
+
+EOL -> %NL | %EOF | %comment

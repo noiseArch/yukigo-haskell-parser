@@ -3,14 +3,13 @@
 // Bypasses TS6133. Allow declared but unused functions.
 // @ts-ignore
 function id(d: any[]): any { return d[0]; }
-declare var NL: any;
-declare var EOF: any;
 declare var number: any;
 declare var char: any;
 declare var string: any;
 declare var bool: any;
 declare var lbracket: any;
 declare var rbracket: any;
+declare var NL: any;
 declare var typeEquals: any;
 declare var assign: any;
 declare var anonymousVariable: any;
@@ -20,6 +19,8 @@ declare var typeArrow: any;
 declare var constructor: any;
 declare var variable: any;
 declare var WS: any;
+declare var EOF: any;
+declare var comment: any;
 
 import { HSLexer } from "./lexer.js"
 import { 
@@ -40,12 +41,6 @@ import {
 const filter = d => {
     return d.filter((token) => token !== null);
 };
-HSLexer.next = (next => () => {
-    let tok;
-    while ((tok = next.call(HSLexer)) && (tok.type === "comment")) {}
-    //console.log(tok);
-    return tok;
-})(HSLexer.next);
 
 
 interface NearleyToken {
@@ -84,24 +79,16 @@ const grammar: Grammar = {
     {"name": "program", "symbols": ["program$ebnf$1"], "postprocess": (d) => d[0].map(x => x[0]).filter(x => x !== null)},
     {"name": "declaration$subexpression$1$subexpression$1", "symbols": ["function_declaration"]},
     {"name": "declaration$subexpression$1", "symbols": ["declaration$subexpression$1$subexpression$1"]},
-    {"name": "declaration$subexpression$1$subexpression$2$subexpression$1", "symbols": [(HSLexer.has("NL") ? {type: "NL"} : NL)]},
-    {"name": "declaration$subexpression$1$subexpression$2$subexpression$1", "symbols": [(HSLexer.has("EOF") ? {type: "EOF"} : EOF)]},
-    {"name": "declaration$subexpression$1$subexpression$2", "symbols": ["function_type_declaration", "declaration$subexpression$1$subexpression$2$subexpression$1"]},
+    {"name": "declaration$subexpression$1$subexpression$2", "symbols": ["function_type_declaration", "_", "EOL"]},
     {"name": "declaration$subexpression$1", "symbols": ["declaration$subexpression$1$subexpression$2"]},
-    {"name": "declaration$subexpression$1$subexpression$3$subexpression$1", "symbols": [(HSLexer.has("NL") ? {type: "NL"} : NL)]},
-    {"name": "declaration$subexpression$1$subexpression$3$subexpression$1", "symbols": [(HSLexer.has("EOF") ? {type: "EOF"} : EOF)]},
-    {"name": "declaration$subexpression$1$subexpression$3", "symbols": ["type_declaration", "declaration$subexpression$1$subexpression$3$subexpression$1"]},
+    {"name": "declaration$subexpression$1$subexpression$3", "symbols": ["type_declaration", "_", "EOL"]},
     {"name": "declaration$subexpression$1", "symbols": ["declaration$subexpression$1$subexpression$3"]},
-    {"name": "declaration$subexpression$1$subexpression$4$subexpression$1", "symbols": [(HSLexer.has("NL") ? {type: "NL"} : NL)]},
-    {"name": "declaration$subexpression$1$subexpression$4$subexpression$1", "symbols": [(HSLexer.has("EOF") ? {type: "EOF"} : EOF)]},
-    {"name": "declaration$subexpression$1$subexpression$4", "symbols": ["data_declaration", "declaration$subexpression$1$subexpression$4$subexpression$1"]},
+    {"name": "declaration$subexpression$1$subexpression$4", "symbols": ["data_declaration", "_", "EOL"]},
     {"name": "declaration$subexpression$1", "symbols": ["declaration$subexpression$1$subexpression$4"]},
     {"name": "declaration$subexpression$1$subexpression$5", "symbols": ["emptyline"]},
     {"name": "declaration$subexpression$1", "symbols": ["declaration$subexpression$1$subexpression$5"]},
-    {"name": "declaration", "symbols": ["declaration$subexpression$1"], "postprocess": (d) => d[0][0][0]},
-    {"name": "emptyline$subexpression$1", "symbols": [(HSLexer.has("NL") ? {type: "NL"} : NL)]},
-    {"name": "emptyline$subexpression$1", "symbols": [(HSLexer.has("EOF") ? {type: "EOF"} : EOF)]},
-    {"name": "emptyline", "symbols": ["_", "emptyline$subexpression$1"], "postprocess": (d) => null},
+    {"name": "declaration", "symbols": ["declaration$subexpression$1"], "postprocess": (d) =>  d[0][0][0]},
+    {"name": "emptyline", "symbols": ["_", "EOL"], "postprocess": (d) => null},
     {"name": "expression", "symbols": ["apply_operator"], "postprocess": (d) => parseExpression(d[0])},
     {"name": "apply_operator", "symbols": ["cons_expression", "_", {"literal":"$"}, "_", "apply_operator"], "postprocess": (d) => parseApplication([d[0], d[4]])},
     {"name": "apply_operator", "symbols": ["cons_expression"], "postprocess": (d) => d[0]},
@@ -194,7 +181,7 @@ const grammar: Grammar = {
     {"name": "field_list$ebnf$1", "symbols": ["field_list$ebnf$1", "field_list$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
     {"name": "field_list", "symbols": ["field", "field_list$ebnf$1"], "postprocess": (d) => [d[0], ...d[1].map(x => x[4])]},
     {"name": "field", "symbols": ["variable", "_", (HSLexer.has("typeEquals") ? {type: "typeEquals"} : typeEquals), "_", "type"], "postprocess": (d) => ({type: "Field", name: d[0], value: d[4]})},
-    {"name": "function_type_declaration", "symbols": ["variable", "_", (HSLexer.has("typeEquals") ? {type: "typeEquals"} : typeEquals), "_", "type", "_"], "postprocess": (d) => parseFunctionType([d[0], d[4]])},
+    {"name": "function_type_declaration", "symbols": ["variable", "_", (HSLexer.has("typeEquals") ? {type: "typeEquals"} : typeEquals), "_", "type"], "postprocess": (d) => parseFunctionType([d[0], d[4]])},
     {"name": "function_declaration$ebnf$1", "symbols": ["parameter_list"], "postprocess": id},
     {"name": "function_declaration$ebnf$1", "symbols": [], "postprocess": () => null},
     {"name": "function_declaration$ebnf$2$subexpression$1", "symbols": [(HSLexer.has("NL") ? {type: "NL"} : NL), "__"]},
@@ -206,16 +193,13 @@ const grammar: Grammar = {
     {"name": "function_declaration$ebnf$4$subexpression$1", "symbols": [(HSLexer.has("NL") ? {type: "NL"} : NL), "__"]},
     {"name": "function_declaration$ebnf$4", "symbols": ["function_declaration$ebnf$4$subexpression$1"], "postprocess": id},
     {"name": "function_declaration$ebnf$4", "symbols": [], "postprocess": () => null},
-    {"name": "function_declaration$subexpression$1", "symbols": [(HSLexer.has("NL") ? {type: "NL"} : NL)]},
-    {"name": "function_declaration$subexpression$1", "symbols": [(HSLexer.has("EOF") ? {type: "EOF"} : EOF)]},
-    {"name": "function_declaration", "symbols": ["variable", "__", "function_declaration$ebnf$3", "_", (HSLexer.has("assign") ? {type: "assign"} : assign), "_", "function_declaration$ebnf$4", "expression", "_", "function_declaration$subexpression$1"], "postprocess": (d) => parseFunction({type: "function", name: d[0], params: d[2] ? d[2] : [], body: d[7], return: d[7], attributes: ["UnguardedBody"]})},
+    {"name": "function_declaration", "symbols": ["variable", "__", "function_declaration$ebnf$3", "_", (HSLexer.has("assign") ? {type: "assign"} : assign), "_", "function_declaration$ebnf$4", "expression", "_", "EOL"], "postprocess": (d) => parseFunction({type: "function", name: d[0], params: d[2] ? d[2] : [], body: d[7], return: d[7], attributes: ["UnguardedBody"]})},
     {"name": "guarded_rhs$ebnf$1", "symbols": ["guarded_branch"]},
     {"name": "guarded_rhs$ebnf$1", "symbols": ["guarded_rhs$ebnf$1", "guarded_branch"], "postprocess": (d) => d[0].concat([d[1]])},
     {"name": "guarded_rhs", "symbols": ["guarded_rhs$ebnf$1"], "postprocess": (d) => d[0]},
     {"name": "guarded_branch$subexpression$1$subexpression$1", "symbols": [(HSLexer.has("NL") ? {type: "NL"} : NL), "__"]},
     {"name": "guarded_branch$subexpression$1", "symbols": ["guarded_branch$subexpression$1$subexpression$1"]},
-    {"name": "guarded_branch$subexpression$1", "symbols": [(HSLexer.has("NL") ? {type: "NL"} : NL)]},
-    {"name": "guarded_branch$subexpression$1", "symbols": [(HSLexer.has("EOF") ? {type: "EOF"} : EOF)]},
+    {"name": "guarded_branch$subexpression$1", "symbols": ["EOL"]},
     {"name": "guarded_branch", "symbols": [{"literal":"|"}, "_", "expression", "_", {"literal":"="}, "_", "expression", "_", "guarded_branch$subexpression$1"], "postprocess": (d) => ({ condition: d[2], body: d[6], return: d[6] })},
     {"name": "parameter_list$ebnf$1", "symbols": []},
     {"name": "parameter_list$ebnf$1$subexpression$1", "symbols": ["__", "pattern"]},
@@ -371,7 +355,10 @@ const grammar: Grammar = {
     {"name": "_", "symbols": ["_$ebnf$1"]},
     {"name": "__$ebnf$1", "symbols": [(HSLexer.has("WS") ? {type: "WS"} : WS)]},
     {"name": "__$ebnf$1", "symbols": ["__$ebnf$1", (HSLexer.has("WS") ? {type: "WS"} : WS)], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "__", "symbols": ["__$ebnf$1"]}
+    {"name": "__", "symbols": ["__$ebnf$1"]},
+    {"name": "EOL", "symbols": [(HSLexer.has("NL") ? {type: "NL"} : NL)]},
+    {"name": "EOL", "symbols": [(HSLexer.has("EOF") ? {type: "EOF"} : EOF)]},
+    {"name": "EOL", "symbols": [(HSLexer.has("comment") ? {type: "comment"} : comment)]}
   ],
   ParserStart: "program",
 };

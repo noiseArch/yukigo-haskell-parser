@@ -73,6 +73,6 @@ export const HaskellLexerConfig = {
   NL: { match: /\r?\n/, lineBreaks: true },
 };
 
-export const HSLexer = makeLexer(HaskellLexerConfig, ["comment"], {
+export const HSLexer = makeLexer(HaskellLexerConfig, [], {
   eof: true,
 });
