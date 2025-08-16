@@ -8,9 +8,10 @@
     "declaration": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
+    "sourceMap": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true
   },
-  "include": ["**/*"],
+  "include": ["src"],
   "exclude": ["dist/**/*"]
 }

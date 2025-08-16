@@ -1,11 +1,10 @@
 import {
   AST,
-  ASTGrouped,
   BodyExpression,
   BooleanPrimitive,
   CharPrimitive,
   Constructor,
-  ControlFlowConditional,
+  If,
   DataExpression,
   Expression,
   FieldExpression,
@@ -18,18 +17,14 @@ import {
 } from "yukigo-core";
 import {
   CompositionExpression,
-  ApplicationExpression,
-  FunctionTypeSignature,
+  Application,
+  TypeSignature,
   TypeAlias,
   Pattern,
-  TypeNode,
-  LambdaExpression,
-  FunctionDeclaration,
+  Type,
+  Lambda,
+  Function,
   InfixApplicationExpression,
-  Constraint,
-  FunctionGroup,
-  GuardedFunctionDeclaration,
-  UnguardedFunctionDeclaration,
 } from "yukigo-core";
 
 interface BaseMooToken {
@@ -52,57 +47,54 @@ interface ListToken {
 
 type Token = BaseMooToken | ListToken;
 
-function parseFunction(token: {
-  type: "function";
+interface TempUnguardedFunction {
+  type: "Function";
   name: SymbolPrimitive;
-  params: Pattern[];
+  parameters: Pattern[];
   body: Expression;
   return: Expression;
   attributes: string[];
-}): FunctionDeclaration {
+}
+interface TempGuardedFunction {
+  type: "Function";
+  name: SymbolPrimitive;
+  parameters: Pattern[];
+  body: { body: Expression; condition: Expression }[];
+  return: Expression;
+  attributes: string[];
+}
+type TempFunction = TempGuardedFunction | TempUnguardedFunction;
+function parseFunction(token: {
+  type: "Function";
+  name: SymbolPrimitive;
+  params: Pattern[];
+  body: Expression;
+  attributes: string[];
+}): TempFunction {
   //console.log("Function", inspect(token, false, null, true));
   return {
-    type: "function",
+    type: "Function",
     name: token.name,
     parameters: token.params,
     body: token.body,
-    return: token.return,
+    return: token.body,
     attributes: token.attributes,
   };
 }
 
-function parseFunctionType(
-  token: [SymbolPrimitive, TypeNode]
-): FunctionTypeSignature {
-  let constraints: Constraint[] = [];
-  let body: TypeNode = token[1];
-  if (token[1].type === "ConstrainedType") {
-    constraints = token[1].context;
-    body = token[1].body;
-  }
-  if (body.type === "FunctionType") {
-    return {
-      type: "TypeSignature",
-      name: token[0],
-      constraints,
-      inputTypes: body.from,
-      returnType: body.to,
-    };
-  }
+function parseFunctionType(token: [SymbolPrimitive, Type]): TypeSignature {
   return {
     type: "TypeSignature",
-    name: token[0],
-    constraints,
-    inputTypes: [],
-    returnType: body,
+    identifier: token[0],
+    body: token[1],
   };
 }
 
-function parseTypeAlias(token: [SymbolPrimitive, TypeNode]): TypeAlias {
+function parseTypeAlias(token: [SymbolPrimitive, Type]): TypeAlias {
   //console.log("Type Alias TypeNode", inspect(token, false, null, true));
   return {
     type: "TypeAlias",
-    name: token[0],
+    identifier: token[0],
     value: token[1],
   };
 }
@@ -112,10 +104,10 @@ function parseExpression(token: BodyExpression): Expression {
   return { type: "Expression", body: token };
 }
 
-function parseLambda(token: [Pattern[], Expression]): LambdaExpression {
+function parseLambda(token: [Pattern[], Expression]): Lambda {
   //console.log("Lambda", util.inspect(token, false, null, true));
-  const lambda: LambdaExpression = {
-    type: "LambdaExpression",
+  const lambda: Lambda = {
+    type: "Lambda",
     parameters: token[0],
     body: token[1],
   };
@@ -136,7 +128,7 @@ function parseCompositionExpression(
 
 function parseApplication(
   token: [BodyExpression, Expression | BodyExpression]
-): ApplicationExpression {
+): Application {
   //console.log("Application", util.inspect(token, false, null, true));
   return {
     type: "Application",
@@ -171,11 +163,9 @@ function parseDataDeclaration(
     contents: token[1],
   };
 }
-function parseConditional(
-  token: [Expression, Expression, Expression]
-): ControlFlowConditional {
+function parseConditional(token: [Expression, Expression, Expression]): If {
   return {
-    type: "IfThenElse",
+    type: "If",
     condition: token[0],
     then: token[1],
     else: token[2],
@@ -190,14 +180,6 @@ function parsePrimary(token: Token): Primitive {
       const identifierPrimitive: SymbolPrimitive = {
         type: "YuSymbol",
         value: token.value,
-        loc: {
-          start: { line: token.line, column: token.col, offset: token.offset },
-          end: {
-            line: token.line,
-            column: token.col,
-            offset: token.offset + token.value.length,
-          },
-        },
       };
       return identifierPrimitive;
     }
@@ -206,14 +188,6 @@ function parsePrimary(token: Token): Primitive {
         type: "YuNumber",
         numericType: "number",
         value: Number(token.value),
-        loc: {
-          start: { line: token.line, column: token.col, offset: token.offset },
-          end: {
-            line: token.line,
-            column: token.col,
-            offset: token.offset + token.value.length,
-          },
-        },
       };
       return numberPrimitive;
     }
@@ -221,14 +195,6 @@ function parsePrimary(token: Token): Primitive {
       const stringPrimitive: CharPrimitive = {
         type: "YuChar",
         value: token.value,
-        loc: {
-          start: { line: token.line, column: token.col, offset: token.offset },
-          end: {
-            line: token.line,
-            column: token.col,
-            offset: token.offset + token.value.length,
-          },
-        },
       };
       return stringPrimitive;
     }
@@ -236,14 +202,6 @@ function parsePrimary(token: Token): Primitive {
       const stringPrimitive: StringPrimitive = {
         type: "YuString",
         value: token.value,
-        loc: {
-          start: { line: token.line, column: token.col, offset: token.offset },
-          end: {
-            line: token.line,
-            column: token.col,
-            offset: token.offset + token.value.length,
-          },
-        },
       };
       return stringPrimitive;
     }
@@ -252,18 +210,6 @@ function parsePrimary(token: Token): Primitive {
       const listPrimitive: ListPrimitive = {
         type: "YuList",
         elements: list.body,
-        loc: {
-          start: {
-            line: list.start.line,
-            column: list.start.col,
-            offset: list.start.offset,
-          },
-          end: {
-            line: list.end.line,
-            column: list.end.col,
-            offset: list.end.offset,
-          },
-        },
       };
       return listPrimitive;
     }
@@ -271,14 +217,6 @@ function parsePrimary(token: Token): Primitive {
       const booleanPrimitive: BooleanPrimitive = {
         type: "YuBoolean",
         value: token.value,
-        loc: {
-          start: { line: token.line, column: token.col, offset: token.offset },
-          end: {
-            line: token.line,
-            column: token.col,
-            offset: token.offset + token.value.length,
-          },
-        },
       };
       return booleanPrimitive;
     }
@@ -290,28 +228,32 @@ function parsePrimary(token: Token): Primitive {
 }
 // Serious doubts with this function
 // Final AST should be... AST (no pun intended) not ASTGrouped
-export function groupFunctionDeclarations(ast: AST): ASTGrouped {
-  const groups: Record<string, FunctionDeclaration[]> = {};
-  const others: ASTGrouped = [];
+export function groupFunctionDeclarations(
+  ast: Omit<AST, "Function"> & TempFunction
+): AST {
+  const groups: Record<string, TempFunction[]> = {};
+  const others: AST = [];
 
   for (const node of ast) {
-    if (node.type == "function") {
-      const name = node.name.value;
+    if (node.type == "Function") {
+      const func = node as unknown as TempFunction;
+      const name = func.name.value;
       if (!groups[name]) groups[name] = [];
-      groups[name].push(node);
+      groups[name].push(func);
     } else {
       others.push(node);
     }
   }
-  const functionGroups: FunctionGroup[] = Object.entries(groups).map(
+  const functionGroups: Function[] = Object.entries(groups).map(
     ([, contents]) => ({
-      type: "function",
-      name: contents[0].name,
-      contents: contents.map((func: FunctionDeclaration) => ({
-        parameters: func.parameters,
-        body: func.body,
-        return: func.return,
-        attributes: func.attributes,
+      type: "Function",
+      identifier: contents[0].name,
+      equations: contents.map((func: TempFunction) => ({
+        type: "Equation",
+        patterns: func.parameters,
+        body: isGuardedBody(func)
+          ? func.body.map((guard) => ({ type: "GuardedBody", ...guard }))
+          : { type: "UnguardedBody", expression: func.body },
       })),
     })
   );
@@ -320,14 +262,14 @@ export function groupFunctionDeclarations(ast: AST): ASTGrouped {
 }
 
 export function isGuardedBody(
-  declaration: Omit<FunctionDeclaration, "name" | "type">
-): declaration is GuardedFunctionDeclaration {
+  declaration: Omit<TempFunction, "name" | "type">
+): declaration is TempGuardedFunction {
   return declaration.attributes.includes("GuardedBody");
 }
 
 export function isUnguardedBody(
-  declaration: Omit<FunctionDeclaration, "name" | "type">
-): declaration is UnguardedFunctionDeclaration {
+  declaration: Omit<TempFunction, "name" | "type">
+): declaration is TempUnguardedFunction {
   return declaration.attributes.includes("UnguardedBody");
 }
 

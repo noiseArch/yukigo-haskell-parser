@@ -11,13 +11,18 @@
   },
   "scripts": {
     "build": "nearleyc ./src/parser/grammar.ne -o ./src/parser/grammar.ts && tsc",
+    "test": "mocha",
     "prepare": "npm run build"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^24.2.0",
+    "chai": "^5.2.1",
+    "mocha": "^11.7.1",
+    "ts-node": "^10.9.2",
     "typescript": "^5.9.2"
   },
   "dependencies": {

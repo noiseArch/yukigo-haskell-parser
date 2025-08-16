@@ -124,12 +124,12 @@ field -> variable _ %typeEquals _ type {% (d) => ({type: "Field", name: d[0], va
 function_type_declaration -> variable _ %typeEquals _ type {% (d) => parseFunctionType([d[0], d[4]]) %}
 
 function_declaration -> 
-    variable __ parameter_list:? _ (%NL __):? guarded_rhs {% (d) => parseFunction({type: "function", name: d[0], params: d[2] ? d[2] : [], body: d[5], return: d[5], attributes: ["GuardedBody"]}) %}
-    | variable __ parameter_list:? _ %assign _ (%NL __):? expression _ EOL {% (d) => parseFunction({type: "function", name: d[0], params: d[2] ? d[2] : [], body: d[7], return: d[7], attributes: ["UnguardedBody"]}) %}
+    variable __ parameter_list:? _ (%NL __):? guarded_rhs {% (d) => parseFunction({type: "Function", name: d[0], params: d[2] ? d[2] : [], body: d[5], attributes: ["GuardedBody"]}) %}
+    | variable __ parameter_list:? _ %assign _ (%NL __):? expression _ EOL {% (d) => parseFunction({type: "Function", name: d[0], params: d[2] ? d[2] : [], body: d[7], attributes: ["UnguardedBody"]}) %}
 
 guarded_rhs -> guarded_branch:+ {% (d) => d[0] %}
 
-guarded_branch -> "|" _ expression _ "=" _ expression _ ((%NL __) | EOL) {% (d) => ({ condition: d[2], body: d[6], return: d[6] }) %}
+guarded_branch -> "|" _ expression _ "=" _ expression _ ((%NL __) | EOL) {% (d) => ({ condition: d[2], body: d[6] }) %}
 
 parameter_list -> pattern (__ pattern):* {% (d) => [d[0], ...d[1].map(x => x[1])] %}
 
@@ -158,7 +158,7 @@ simple_pattern ->
 
 wildcard_pattern -> %anonymousVariable {% (d) => ({
   type: "WildcardPattern",
-  value: "_"
+  name: "_"
 }) %}
 
 paren_pattern -> "(" _ pattern _ ")" {% (d) => d[2] %}
@@ -166,7 +166,7 @@ paren_pattern -> "(" _ pattern _ ")" {% (d) => d[2] %}
 variable_pattern -> variable {% (d) => ({type: "VariablePattern", name: d[0]}) %}
 
 literal_pattern -> 
-  (%number | %char | %string | %bool) {% (d) => ({type: "LiteralPattern", value: parsePrimary(d[0][0])}) %} 
+  (%number | %char | %string | %bool) {% (d) => ({type: "LiteralPattern", name: parsePrimary(d[0][0])}) %} 
 
 as_pattern -> (variable_pattern | wildcard_pattern) _ "@" _ pattern {% (d) => ({type: "AsPattern", alias: d[0][0], pattern: d[4]}) %}
 
@@ -228,55 +228,87 @@ case_alternative ->
 
 # Type rules
 
-type_declaration -> ("type" __ constr _ "=" _ type) {% (d) => parseTypeAlias([d[0][2], d[0][6]]) %}
+type_declaration -> ("type" __ constr _ "=" _ type) {% (d) => ({
+  type: "TypeAlias",
+  identifier: d[0][2].value,
+  value: d[0][6]
+}) %}
 
 type -> 
   constrained_type {% (d) => d[0] %} 
   | function_type {% (d) => d[0] %}
 
 constrained_type -> 
-    context _ %arrow _ type {% (d) => ({ 
-        type: "ConstrainedType", 
-        context: d[0], 
-        body: d[4] 
-    }) %}
+  constraint_list _ %arrow _ type {% (d) => ({
+    type: "ConstrainedType",
+    constraints: d[0].map(c => c.className),
+    body: d[4]
+  }) %}
 
 context -> 
-    constraint {% (d) => [d[0]] %}
-    | "(" _ constraint_list _ ")" {% (d) => d[2] %}
+  constraint {% (d) => [d[0]] %}
+  | "(" _ constraint_list _ ")" {% (d) => d[2] %}
 
 constraint_list -> 
-    constraint (_ "," _ constraint):* {% (d) => 
-        [d[0], ...d[1].map(x => x[3])] 
-    %}
+  constraint (_ "," _ constraint):* {% (d) => 
+    [d[0], ...d[1].map(x => x[3])]
+  %}
 
 constraint -> 
-    %typeClass (_ application_type):+ {% (d) => ({
-        type: "Constraint",
-        className: d[0].value,
-        params: d[1].map(x => x[1])
-    }) %}
+  %typeClass (_ application_type):+ {% (d) => ({
+    type: "Constraint",
+    className: d[0].value,
+    params: d[1].map(x => x[1])
+  }) %}
 
 function_type ->
-    (application_type _ %typeArrow _):* application_type {% (d) => (d[0].length > 0 ? { type: "FunctionType", from: d[0].map(x => x[0]), to: d[1] } : d[1]) %}
+  (application_type _ %typeArrow _):* application_type {% (d) => (
+    d[0].length > 0
+    ? {
+      type: "ParameterizedType",
+      inputs: d[0].map(x => x[0]),
+      return: d[1],
+      constraints: []
+    }
+    : d[1]
+  ) %}
 
 application_type ->
-    simple_type (_ simple_type):* {% (d) =>
-        d[1].length === 0 ? d[0] : { type: "TypeApplication", base: d[0], args: d[1].map(x => x[1]) }
-    %}
+  simple_type (_ simple_type):* {% (d) =>
+    d[1].length === 0
+    ? d[0]
+    : {
+      type: "SimpleType",
+      value: d[0].identifier,
+      constraints: [],
+    }
+  %}
 
 simple_type ->
-    type_variable {% (d) => d[0] %}
-  | type_constructor {% (d) => d[0] %}
-  | "[" _ type _ "]" {% (d) => ({ type: "ListType", element: d[2] }) %}
-  | "(" _ type (_ "," _ type):+ _ ")" {% (d) => ({ 
-      type: "TupleType", 
-      elements: [d[2], ...d[3].map(x => x[3])] 
+    type_variable {% (d) => ({
+        type: "SimpleType",
+        value: d[0].identifier,
+        constraints: [],
+    }) %}
+  | type_constructor {% (d) => ({
+        type: "SimpleType",
+        value: d[0].identifier,
+        constraints: [],
+    }) %}
+  | "[" _ type _ "]" {% (d) => ({
+        type: "SimpleType",
+        value: d[2].identifier,
+        constraints: [],
+    }) %}
+  | "(" _ type (_ "," _ type):+ _ ")" {% (d) => ({
+        type: "SimpleType",
+        value: [d[2].identifier, ...d[3].map(x => x[3].identifier)],
+        constraints: [],
     }) %}
   | "(" _ type _ ")" {% (d) => d[2] %}
 
-type_variable -> variable {% (d) => ({ type: "TypeVar", name: d[0].value }) %}
-type_constructor -> constr {% (d) => ({ type: "TypeConstructor", name: d[0].value }) %}
+type_variable -> variable {% (d) => ({ identifier: d[0].value }) %}
+type_constructor -> constr {% (d) => ({ identifier: d[0].value }) %}
 
 # Misc rules
 

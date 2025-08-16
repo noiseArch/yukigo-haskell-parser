@@ -1,5 +1,4 @@
 import { YukigoPrimitive } from "yukigo-core";
-import { TypeNode } from "yukigo-core";
 
 export const keywords = [
   "type",
@@ -41,7 +40,7 @@ export const typeMappings: { [key: string]: YukigoPrimitive } = {
 };
 
 // Yet to be implemented
-export const typeClasses: Map<string, TypeNode[]> = new Map([
+/* export const typeClasses: Map<string, Type[]> = new Map([
   ["Bounded", []],
   ["Enum", []],
   ["Eq", []],
@@ -74,4 +73,4 @@ export const typeClasses: Map<string, TypeNode[]> = new Map([
   ["RealFloat", []],
   ["RealFrac", []],
   ["Show", []],
-]);
+]); */

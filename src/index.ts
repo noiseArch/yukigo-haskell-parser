@@ -2,7 +2,7 @@ import grammar from "./parser/grammar.js";
 import nearley from "nearley";
 import { groupFunctionDeclarations } from "./utils/helpers.js";
 import { TypeChecker } from "./typechecker.js";
-import { ASTGrouped, YukigoParser } from "yukigo-core";
+import { AST, YukigoParser } from "yukigo-core";
 
 // This is the final parser that Yukigo accepts.
 // every parser NEEDS to expose a 'parse' method/function and an array of errors
@@ -13,7 +13,7 @@ export class YukigoHaskellParser implements YukigoParser {
     this.errors = [];
   }
 
-  public parse(code: string): ASTGrouped {
+  public parse(code: string): AST {
     const parser = new nearley.Parser(nearley.Grammar.fromCompiled(grammar));
     try {
       parser.feed(code);
