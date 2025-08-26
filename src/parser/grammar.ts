@@ -33,10 +33,17 @@ import {
     parseApplication, 
     parseExpression, 
     parseCompositionExpression, 
-    parseTypeAlias, 
+
     parseFunctionType, 
     parseLambda
 } from "../utils/helpers.js";
+
+import { 
+  constraint, 
+  typeAlias,
+  listType,
+  tupleType
+} from "yukigo-core"
 
 const filter = d => {
     return d.filter((token) => token !== null);
@@ -98,15 +105,15 @@ const grammar: Grammar = {
             tail: {type: "Expression", body: d[4]}
         }) },
     {"name": "cons_expression", "symbols": ["concatenation"], "postprocess": (d) => d[0]},
-    {"name": "concatenation", "symbols": ["comparison", "_", {"literal":"++"}, "_", "concatenation"], "postprocess": (d) => ({ type: "Concat", operator: d[2].value, left: {type: "Expression", body:d[0]}, right: {type: "Expression", body:d[4]} })},
+    {"name": "concatenation", "symbols": ["comparison", "_", {"literal":"++"}, "_", "concatenation"], "postprocess": (d) => ({ type: "StringOperation", operator: "Concat", left: {type: "Expression", body:d[0]}, right: {type: "Expression", body:d[4]} })},
     {"name": "concatenation", "symbols": ["comparison"], "postprocess": (d) => d[0]},
-    {"name": "comparison", "symbols": ["addition", "_", "comparison_operator", "_", "comparison"], "postprocess": (d) => ({ type: "Comparison", operator: d[2], left: {type: "Expression", body:d[0]}, right: {type: "Expression", body:d[4]} })},
+    {"name": "comparison", "symbols": ["addition", "_", "comparison_operator", "_", "comparison"], "postprocess": (d) => ({ type: "ComparisonOperation", operator: d[2], left: {type: "Expression", body:d[0]}, right: {type: "Expression", body:d[4]} })},
     {"name": "comparison", "symbols": ["addition"], "postprocess": (d) => d[0]},
-    {"name": "addition", "symbols": ["multiplication", "_", {"literal":"+"}, "_", "addition"], "postprocess": (d) => ({ type: "Arithmetic", operator: d[2].value, left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} })},
-    {"name": "addition", "symbols": ["multiplication", "_", {"literal":"-"}, "_", "addition"], "postprocess": (d) => ({ type: "Arithmetic", operator: d[2].value, left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} })},
+    {"name": "addition", "symbols": ["multiplication", "_", {"literal":"+"}, "_", "addition"], "postprocess": (d) => ({ type: "ArithmeticOperation", operator: "Plus", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} })},
+    {"name": "addition", "symbols": ["multiplication", "_", {"literal":"-"}, "_", "addition"], "postprocess": (d) => ({ type: "ArithmeticOperation", operator: "Minus", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} })},
     {"name": "addition", "symbols": ["multiplication"], "postprocess": (d) => d[0]},
-    {"name": "multiplication", "symbols": ["infix_operator_expression", "_", {"literal":"*"}, "_", "multiplication"], "postprocess": (d) => ({ type: "Arithmetic", operator: d[2].value, left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} })},
-    {"name": "multiplication", "symbols": ["infix_operator_expression", "_", {"literal":"/"}, "_", "multiplication"], "postprocess": (d) => ({ type: "Arithmetic", operator: d[2].value, left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} })},
+    {"name": "multiplication", "symbols": ["infix_operator_expression", "_", {"literal":"*"}, "_", "multiplication"], "postprocess": (d) => ({ type: "ArithmeticOperation", operator: "Multiply", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} })},
+    {"name": "multiplication", "symbols": ["infix_operator_expression", "_", {"literal":"/"}, "_", "multiplication"], "postprocess": (d) => ({ type: "ArithmeticOperation", operator: "Divide", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} })},
     {"name": "multiplication", "symbols": ["infix_operator_expression"], "postprocess": (d) => d[0]},
     {"name": "infix_operator_expression", "symbols": ["application", "_", {"literal":"`"}, "_", "variable", "_", {"literal":"`"}, "_", "infix_operator_expression"], "postprocess": (d) => parseInfixApplication([d[4], d[0], d[8]])},
     {"name": "infix_operator_expression", "symbols": ["application"], "postprocess": d => d[0]},
@@ -132,7 +139,7 @@ const grammar: Grammar = {
     {"name": "primary", "symbols": ["case_expression"], "postprocess": d => d[0]},
     {"name": "primary", "symbols": ["data_expression"], "postprocess": d => d[0]},
     {"name": "primary", "symbols": ["let_in_expression"], "postprocess": d => d[0]},
-    {"name": "composition_expression", "symbols": ["variable", "_", {"literal":"."}, "_", "variable"], "postprocess": (d) => parseCompositionExpression([d[0], d[4]])},
+    {"name": "composition_expression", "symbols": ["expression", "_", {"literal":"."}, "_", "expression"], "postprocess": (d) => parseCompositionExpression([d[0], d[4]])},
     {"name": "lambda_expression", "symbols": [{"literal":"("}, "_", {"literal":"\\"}, "_", "parameter_list", "_", {"literal":"->"}, "_", "expression", "_", {"literal":")"}], "postprocess": (d) => parseLambda([d[4], d[8]])},
     {"name": "tuple_expression$ebnf$1$subexpression$1", "symbols": ["_", {"literal":","}, "_", "expression"]},
     {"name": "tuple_expression$ebnf$1", "symbols": ["tuple_expression$ebnf$1$subexpression$1"]},
@@ -286,13 +293,14 @@ const grammar: Grammar = {
     {"name": "case_alternatives$ebnf$1", "symbols": ["case_alternatives$ebnf$1", "case_alternatives$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
     {"name": "case_alternatives", "symbols": ["case_alternative", "case_alternatives$ebnf$1"], "postprocess": (d) => [d[0], ...d[1].map(x => x[1])]},
     {"name": "case_alternative", "symbols": ["pattern", "_", {"literal":"->"}, "_", "expression"], "postprocess": (d) => ({ pattern: d[0], body: d[4] })},
-    {"name": "type_declaration$subexpression$1", "symbols": [{"literal":"type"}, "__", "constr", "_", {"literal":"="}, "_", "type"]},
-    {"name": "type_declaration", "symbols": ["type_declaration$subexpression$1"], "postprocess":  (d) => ({
-          type: "TypeAlias",
-          identifier: d[0][2].value,
-          value: d[0][6]
-        }) },
-    {"name": "type", "symbols": ["constrained_type"], "postprocess": (d) => d[0]},
+    {"name": "type_declaration$ebnf$1$subexpression$1", "symbols": ["__", "variable_list"]},
+    {"name": "type_declaration$ebnf$1", "symbols": ["type_declaration$ebnf$1$subexpression$1"], "postprocess": id},
+    {"name": "type_declaration$ebnf$1", "symbols": [], "postprocess": () => null},
+    {"name": "type_declaration", "symbols": [{"literal":"type"}, "__", "constr", "type_declaration$ebnf$1", "_", {"literal":"="}, "_", "type"], "postprocess": (d) => typeAlias(d[2].value, d[7], d[3] ? d[3][1] : [])},
+    {"name": "variable_list$ebnf$1", "symbols": []},
+    {"name": "variable_list$ebnf$1$subexpression$1", "symbols": ["__", "variable"]},
+    {"name": "variable_list$ebnf$1", "symbols": ["variable_list$ebnf$1", "variable_list$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
+    {"name": "variable_list", "symbols": ["variable", "variable_list$ebnf$1"], "postprocess": (d) => [d[0].value, ...d[1].map(x => x[1].value)]},
     {"name": "type", "symbols": ["function_type"], "postprocess": (d) => d[0]},
     {"name": "constrained_type", "symbols": ["constraint_list", "_", (HSLexer.has("arrow") ? {type: "arrow"} : arrow), "_", "type"], "postprocess":  (d) => ({
           type: "ConstrainedType",
@@ -311,23 +319,22 @@ const grammar: Grammar = {
     {"name": "constraint$ebnf$1", "symbols": ["constraint$ebnf$1$subexpression$1"]},
     {"name": "constraint$ebnf$1$subexpression$2", "symbols": ["_", "application_type"]},
     {"name": "constraint$ebnf$1", "symbols": ["constraint$ebnf$1", "constraint$ebnf$1$subexpression$2"], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "constraint", "symbols": [(HSLexer.has("typeClass") ? {type: "typeClass"} : typeClass), "constraint$ebnf$1"], "postprocess":  (d) => ({
-          type: "Constraint",
-          className: d[0].value,
-          params: d[1].map(x => x[1])
-        }) },
-    {"name": "function_type$ebnf$1", "symbols": []},
-    {"name": "function_type$ebnf$1$subexpression$1", "symbols": ["application_type", "_", (HSLexer.has("typeArrow") ? {type: "typeArrow"} : typeArrow), "_"]},
-    {"name": "function_type$ebnf$1", "symbols": ["function_type$ebnf$1", "function_type$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "function_type", "symbols": ["function_type$ebnf$1", "application_type"], "postprocess":  (d) => (
-          d[0].length > 0
+    {"name": "constraint", "symbols": [(HSLexer.has("typeClass") ? {type: "typeClass"} : typeClass), "constraint$ebnf$1"], "postprocess": (d) => constraint(d[0].value, d[1].map(x => x[1]))},
+    {"name": "function_type$ebnf$1$subexpression$1", "symbols": ["context", "_", (HSLexer.has("arrow") ? {type: "arrow"} : arrow), "_"]},
+    {"name": "function_type$ebnf$1", "symbols": ["function_type$ebnf$1$subexpression$1"], "postprocess": id},
+    {"name": "function_type$ebnf$1", "symbols": [], "postprocess": () => null},
+    {"name": "function_type$ebnf$2", "symbols": []},
+    {"name": "function_type$ebnf$2$subexpression$1", "symbols": ["application_type", "_", (HSLexer.has("typeArrow") ? {type: "typeArrow"} : typeArrow), "_"]},
+    {"name": "function_type$ebnf$2", "symbols": ["function_type$ebnf$2", "function_type$ebnf$2$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
+    {"name": "function_type", "symbols": ["function_type$ebnf$1", "function_type$ebnf$2", "application_type"], "postprocess":  (d) => (
+          d[1].length > 0
           ? {
             type: "ParameterizedType",
-            inputs: d[0].map(x => x[0]),
-            return: d[1],
-            constraints: []
+            inputs: d[1].map(x => x[0]),
+            return: d[2],
+            constraints: d[0] ? d[0][0] : []
           }
-          : d[1]
+          : d[2]
         ) },
     {"name": "application_type$ebnf$1", "symbols": []},
     {"name": "application_type$ebnf$1$subexpression$1", "symbols": ["_", "simple_type"]},
@@ -343,31 +350,23 @@ const grammar: Grammar = {
           },
     {"name": "simple_type", "symbols": ["type_variable"], "postprocess":  (d) => ({
             type: "SimpleType",
-            value: d[0].identifier,
+            value: d[0].value,
             constraints: [],
         }) },
     {"name": "simple_type", "symbols": ["type_constructor"], "postprocess":  (d) => ({
             type: "SimpleType",
-            value: d[0].identifier,
+            value: d[0].value,
             constraints: [],
         }) },
-    {"name": "simple_type", "symbols": [{"literal":"["}, "_", "type", "_", {"literal":"]"}], "postprocess":  (d) => ({
-            type: "SimpleType",
-            value: d[2].identifier,
-            constraints: [],
-        }) },
+    {"name": "simple_type", "symbols": [{"literal":"["}, "_", "type", "_", {"literal":"]"}], "postprocess": (d) => listType(d[2])},
     {"name": "simple_type$ebnf$1$subexpression$1", "symbols": ["_", {"literal":","}, "_", "type"]},
     {"name": "simple_type$ebnf$1", "symbols": ["simple_type$ebnf$1$subexpression$1"]},
     {"name": "simple_type$ebnf$1$subexpression$2", "symbols": ["_", {"literal":","}, "_", "type"]},
     {"name": "simple_type$ebnf$1", "symbols": ["simple_type$ebnf$1", "simple_type$ebnf$1$subexpression$2"], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "simple_type", "symbols": [{"literal":"("}, "_", "type", "simple_type$ebnf$1", "_", {"literal":")"}], "postprocess":  (d) => ({
-            type: "SimpleType",
-            value: [d[2].identifier, ...d[3].map(x => x[3].identifier)],
-            constraints: [],
-        }) },
+    {"name": "simple_type", "symbols": [{"literal":"("}, "_", "type", "simple_type$ebnf$1", "_", {"literal":")"}], "postprocess": (d) => tupleType([d[2], ...d[3].map(x => x[3])])},
     {"name": "simple_type", "symbols": [{"literal":"("}, "_", "type", "_", {"literal":")"}], "postprocess": (d) => d[2]},
-    {"name": "type_variable", "symbols": ["variable"], "postprocess": (d) => ({ identifier: d[0].value })},
-    {"name": "type_constructor", "symbols": ["constr"], "postprocess": (d) => ({ identifier: d[0].value })},
+    {"name": "type_variable", "symbols": ["variable"], "postprocess": (d) => ({ value: d[0].value })},
+    {"name": "type_constructor", "symbols": ["constr"], "postprocess": (d) => ({ value: d[0].value })},
     {"name": "constr", "symbols": [(HSLexer.has("constructor") ? {type: "constructor"} : constructor)], "postprocess": (d) => parsePrimary(d[0])},
     {"name": "variable", "symbols": [(HSLexer.has("variable") ? {type: "variable"} : variable)], "postprocess": (d) => parsePrimary(d[0])},
     {"name": "list_literal", "symbols": [{"literal":"["}, "_", {"literal":"]"}], "postprocess": (d) => ({elements: [], start: d[0], end: d[2]})},
@@ -376,12 +375,12 @@ const grammar: Grammar = {
     {"name": "expression_list$ebnf$1$subexpression$1", "symbols": ["_", {"literal":","}, "_", "expression"]},
     {"name": "expression_list$ebnf$1", "symbols": ["expression_list$ebnf$1", "expression_list$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
     {"name": "expression_list", "symbols": ["expression", "expression_list$ebnf$1"], "postprocess": (d) => [d[0], ...d[1].map(x => x[3])]},
-    {"name": "comparison_operator", "symbols": [{"literal":"=="}]},
-    {"name": "comparison_operator", "symbols": [{"literal":"/="}]},
-    {"name": "comparison_operator", "symbols": [{"literal":"<"}]},
-    {"name": "comparison_operator", "symbols": [{"literal":">"}]},
-    {"name": "comparison_operator", "symbols": [{"literal":"<="}]},
-    {"name": "comparison_operator", "symbols": [{"literal":">="}], "postprocess": (d) => d[0].value},
+    {"name": "comparison_operator", "symbols": [{"literal":"=="}], "postprocess": (d) => "Equal"},
+    {"name": "comparison_operator", "symbols": [{"literal":"/="}], "postprocess": (d) => "NotEqual"},
+    {"name": "comparison_operator", "symbols": [{"literal":"<"}], "postprocess": (d) => "LessThan"},
+    {"name": "comparison_operator", "symbols": [{"literal":">"}], "postprocess": (d) => "GreaterThan"},
+    {"name": "comparison_operator", "symbols": [{"literal":"<="}], "postprocess": (d) => "LessOrEqualThan"},
+    {"name": "comparison_operator", "symbols": [{"literal":">="}], "postprocess": (d) => "GreaterOrEqualThan"},
     {"name": "_$ebnf$1", "symbols": []},
     {"name": "_$ebnf$1", "symbols": ["_$ebnf$1", (HSLexer.has("WS") ? {type: "WS"} : WS)], "postprocess": (d) => d[0].concat([d[1]])},
     {"name": "_", "symbols": ["_$ebnf$1"]},

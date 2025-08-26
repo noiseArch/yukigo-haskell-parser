@@ -10,10 +10,17 @@ import {
     parseApplication, 
     parseExpression, 
     parseCompositionExpression, 
-    parseTypeAlias, 
+
     parseFunctionType, 
     parseLambda
 } from "../utils/helpers.js";
+
+import { 
+  constraint, 
+  typeAlias,
+  listType,
+  tupleType
+} from "yukigo-core"
 
 const filter = d => {
     return d.filter((token) => token !== null);
@@ -46,21 +53,21 @@ cons_expression ->
     | concatenation {% (d) => d[0] %}
 
 concatenation ->
-    comparison _ "++" _ concatenation {% (d) => ({ type: "Concat", operator: d[2].value, left: {type: "Expression", body:d[0]}, right: {type: "Expression", body:d[4]} }) %}
+    comparison _ "++" _ concatenation {% (d) => ({ type: "StringOperation", operator: "Concat", left: {type: "Expression", body:d[0]}, right: {type: "Expression", body:d[4]} }) %}
     | comparison {% (d) => d[0] %}
 
 comparison ->
-    addition _ comparison_operator _ comparison {% (d) => ({ type: "Comparison", operator: d[2], left: {type: "Expression", body:d[0]}, right: {type: "Expression", body:d[4]} }) %}
+    addition _ comparison_operator _ comparison {% (d) => ({ type: "ComparisonOperation", operator: d[2], left: {type: "Expression", body:d[0]}, right: {type: "Expression", body:d[4]} }) %}
     | addition {% (d) => d[0] %}
 
 addition -> 
-    multiplication _ "+" _ addition {% (d) => ({ type: "Arithmetic", operator: d[2].value, left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} }) %}
-    | multiplication _ "-" _ addition {% (d) => ({ type: "Arithmetic", operator: d[2].value, left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} }) %}
+    multiplication _ "+" _ addition {% (d) => ({ type: "ArithmeticOperation", operator: "Plus", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} }) %}
+    | multiplication _ "-" _ addition {% (d) => ({ type: "ArithmeticOperation", operator: "Minus", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} }) %}
     | multiplication {% (d) => d[0] %}
 
 multiplication ->
-    infix_operator_expression _ "*" _ multiplication {% (d) => ({ type: "Arithmetic", operator: d[2].value, left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} }) %}
-    | infix_operator_expression _ "/" _ multiplication {% (d) => ({ type: "Arithmetic", operator: d[2].value, left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} }) %}
+    infix_operator_expression _ "*" _ multiplication {% (d) => ({ type: "ArithmeticOperation", operator: "Multiply", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} }) %}
+    | infix_operator_expression _ "/" _ multiplication {% (d) => ({ type: "ArithmeticOperation", operator: "Divide", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} }) %}
     | infix_operator_expression {% (d) => d[0] %}
 
 infix_operator_expression ->
@@ -92,7 +99,7 @@ primary ->
 # Expression rules
 
 composition_expression ->
-    variable _ "." _ variable {% (d) => parseCompositionExpression([d[0], d[4]]) %}
+    expression _ "." _ expression {% (d) => parseCompositionExpression([d[0], d[4]]) %}
 
 lambda_expression -> 
     "(" _ "\\" _ parameter_list _ "->" _ expression _ ")" {% (d) => parseLambda([d[4], d[8]]) %}
@@ -228,15 +235,11 @@ case_alternative ->
 
 # Type rules
 
-type_declaration -> ("type" __ constr _ "=" _ type) {% (d) => ({
-  type: "TypeAlias",
-  identifier: d[0][2].value,
-  value: d[0][6]
-}) %}
+type_declaration -> "type" __ constr (__ variable_list):? _ "=" _ type {% (d) => typeAlias(d[2].value, d[7], d[3] ? d[3][1] : []) %}
 
-type -> 
-  constrained_type {% (d) => d[0] %} 
-  | function_type {% (d) => d[0] %}
+variable_list -> variable (__ variable):* {% (d) => [d[0].value, ...d[1].map(x => x[1].value)] %}
+
+type -> function_type {% (d) => d[0] %}
 
 constrained_type -> 
   constraint_list _ %arrow _ type {% (d) => ({
@@ -255,22 +258,18 @@ constraint_list ->
   %}
 
 constraint -> 
-  %typeClass (_ application_type):+ {% (d) => ({
-    type: "Constraint",
-    className: d[0].value,
-    params: d[1].map(x => x[1])
-  }) %}
+  %typeClass (_ application_type):+ {% (d) => constraint(d[0].value, d[1].map(x => x[1])) %}
 
 function_type ->
-  (application_type _ %typeArrow _):* application_type {% (d) => (
-    d[0].length > 0
+  (context _ %arrow _):? (application_type _ %typeArrow _):* application_type {% (d) => (
+    d[1].length > 0
     ? {
       type: "ParameterizedType",
-      inputs: d[0].map(x => x[0]),
-      return: d[1],
-      constraints: []
+      inputs: d[1].map(x => x[0]),
+      return: d[2],
+      constraints: d[0] ? d[0][0] : []
     }
-    : d[1]
+    : d[2]
   ) %}
 
 application_type ->
@@ -287,28 +286,20 @@ application_type ->
 simple_type ->
     type_variable {% (d) => ({
         type: "SimpleType",
-        value: d[0].identifier,
+        value: d[0].value,
         constraints: [],
     }) %}
   | type_constructor {% (d) => ({
         type: "SimpleType",
-        value: d[0].identifier,
+        value: d[0].value,
         constraints: [],
     }) %}
-  | "[" _ type _ "]" {% (d) => ({
-        type: "SimpleType",
-        value: d[2].identifier,
-        constraints: [],
-    }) %}
-  | "(" _ type (_ "," _ type):+ _ ")" {% (d) => ({
-        type: "SimpleType",
-        value: [d[2].identifier, ...d[3].map(x => x[3].identifier)],
-        constraints: [],
-    }) %}
+  | "[" _ type _ "]" {% (d) => listType(d[2]) %}
+  | "(" _ type (_ "," _ type):+ _ ")" {% (d) => tupleType([d[2], ...d[3].map(x => x[3])]) %}
   | "(" _ type _ ")" {% (d) => d[2] %}
 
-type_variable -> variable {% (d) => ({ identifier: d[0].value }) %}
-type_constructor -> constr {% (d) => ({ identifier: d[0].value }) %}
+type_variable -> variable {% (d) => ({ value: d[0].value }) %}
+type_constructor -> constr {% (d) => ({ value: d[0].value }) %}
 
 # Misc rules
 
@@ -322,7 +313,12 @@ list_literal ->
 expression_list -> expression (_ "," _ expression):* {% (d) => [d[0], ...d[1].map(x => x[3])] %}
 
 comparison_operator -> 
-    "==" | "/=" | "<" | ">" | "<=" | ">=" {% (d) => d[0].value %}
+    "==" {% (d) => "Equal" %}
+    | "/=" {% (d) => "NotEqual" %}
+    | "<" {% (d) => "LessThan" %}
+    | ">" {% (d) => "GreaterThan" %}
+    | "<="  {% (d) => "LessOrEqualThan" %}
+    | ">=" {% (d) => "GreaterOrEqualThan" %}
 
 _ -> %WS:*
 

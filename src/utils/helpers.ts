@@ -90,15 +90,6 @@ function parseFunctionType(token: [SymbolPrimitive, Type]): TypeSignature {
   };
 }
 
-function parseTypeAlias(token: [SymbolPrimitive, Type]): TypeAlias {
-  //console.log("Type Alias TypeNode", inspect(token, false, null, true));
-  return {
-    type: "TypeAlias",
-    identifier: token[0],
-    value: token[1],
-  };
-}
-
 function parseExpression(token: BodyExpression): Expression {
   //console.log("Expression", inspect(token, false, null, true));
   return { type: "Expression", body: token };
@@ -115,7 +106,7 @@ function parseLambda(token: [Pattern[], Expression]): Lambda {
 }
 
 function parseCompositionExpression(
-  token: [SymbolPrimitive, SymbolPrimitive]
+  token: [Expression, Expression]
 ): CompositionExpression {
   //console.log("Composition Expr", util.inspect(token, false, null, true));
   const compositionExpression: CompositionExpression = {
@@ -279,7 +270,6 @@ export {
   parseExpression,
   parseConditional,
   parseCompositionExpression,
-  parseTypeAlias,
   parseDataDeclaration,
   parseFunctionType,
   parseInfixApplication,
