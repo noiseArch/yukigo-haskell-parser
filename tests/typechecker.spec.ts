@@ -40,7 +40,7 @@ describe("TypeChecker Tests", () => {
     parser.parse(code);
     assert.include(
       parser.errors,
-      "List elements must all be same type. Found: YuNumber and others"
+      "TypeError in 'f': List elements must have the same type"
     );
   });
 
@@ -53,7 +53,10 @@ describe("TypeChecker Tests", () => {
   it("reports function arity mismatch", () => {
     const code = `f :: Int -> Int\nf x y = x + y`;
     parser.parse(code);
-    assert.include(parser.errors, "Function 'f' has arity mismatch");
+    assert.include(
+      parser.errors,
+      "Arity mismatch in function 'f': signature expects 1 arguments, but equation has 2"
+    );
   });
 
   it("reports infinite type error", () => {
@@ -103,26 +106,33 @@ describe("TypeChecker Tests", () => {
     parser.parse(code);
     assert.include(
       parser.errors,
-      "List elements must all be same type. Found: [YuNumber] and others"
+      "TypeError in 'f': List elements must have the same type"
     );
   });
 
   it("reports tuple arity mismatch in pattern", () => {
     const code = `f (x, y) = x\nf (x, y, z) = x`;
     parser.parse(code);
-    console.log(parser.errors)
-    assert.include(parser.errors, "Type mismatch");
+    assert.include(
+      parser.errors,
+      "Tuple arity mismatch. Expected 2 elements and got 3"
+    );
   });
 
   it("reports record constructor argument mismatch", () => {
     const code = `data Foo = Bar Int | Baz String\r\nf = Bar 'a'`;
     parser.parse(code);
-    assert.include(parser.errors, "Cannot apply YuChar to function expecting YuNumber");
+    assert.include(
+      parser.errors,
+      "Cannot apply YuChar to function expecting YuNumber"
+    );
   });
 
   it("accepts type alias with parameterized types", () => {
     const code = `type Pair a b = (a, b)\r\nf :: Pair Int String -> Int\nf (x, y) = x`;
     parser.parse(code);
+    console.log(parser.errors)
+
     assert.isEmpty(parser.errors);
   });
 

@@ -41,6 +41,9 @@ import {
 import { 
   constraint, 
   typeAlias,
+  expression,
+  symbolPrimitive,
+  application,
   listType,
   tupleType
 } from "yukigo-core"
@@ -124,6 +127,24 @@ const grammar: Grammar = {
             if (d[1].length === 0) return d[0];
             return d[1].reduce((left, right) => parseApplication([left, right[1]]), d[0]);
         } },
+    {"name": "operator", "symbols": [{"literal":"=="}], "postprocess": (d) => "Equal"},
+    {"name": "operator", "symbols": [{"literal":"/="}], "postprocess": (d) => "NotEqual"},
+    {"name": "operator", "symbols": [{"literal":"<"}], "postprocess": (d) => "LessThan"},
+    {"name": "operator", "symbols": [{"literal":">"}], "postprocess": (d) => "GreaterThan"},
+    {"name": "operator", "symbols": [{"literal":"<="}], "postprocess": (d) => "LessOrEqualThan"},
+    {"name": "operator", "symbols": [{"literal":">="}], "postprocess": (d) => "GreaterOrEqualThan"},
+    {"name": "operator", "symbols": [{"literal":"+"}], "postprocess": (d) => "Plus"},
+    {"name": "operator", "symbols": [{"literal":"-"}], "postprocess": (d) => "Minus"},
+    {"name": "operator", "symbols": [{"literal":"*"}], "postprocess": (d) => "Multiply"},
+    {"name": "operator", "symbols": [{"literal":"/"}], "postprocess": (d) => "Divide"},
+    {"name": "left_section", "symbols": [{"literal":"("}, "_", "expression", "_", "operator", "_", {"literal":")"}], "postprocess": (d) => application(expression(symbolPrimitive(d[4])), d[2])},
+    {"name": "right_section", "symbols": [{"literal":"("}, "_", "operator", "_", "expression", "_", {"literal":")"}], "postprocess":  (d) => {
+          const innerApp = expression(application(expression(symbolPrimitive(d[2])), d[4]));
+          const flipBody = expression(symbolPrimitive("flip"));
+        
+          return application(flipBody, innerApp);
+        }
+        },
     {"name": "primary", "symbols": [(HSLexer.has("number") ? {type: "number"} : number)], "postprocess": (d) => parsePrimary(d[0])},
     {"name": "primary", "symbols": [(HSLexer.has("char") ? {type: "char"} : char)], "postprocess": (d) => parsePrimary(d[0])},
     {"name": "primary", "symbols": [(HSLexer.has("string") ? {type: "string"} : string)], "postprocess": (d) => parsePrimary(d[0])},
@@ -131,6 +152,8 @@ const grammar: Grammar = {
     {"name": "primary", "symbols": ["variable"], "postprocess": (d) => d[0]},
     {"name": "primary", "symbols": ["constr"], "postprocess": (d) => d[0]},
     {"name": "primary", "symbols": ["tuple_expression"], "postprocess": (d) => d[0]},
+    {"name": "primary", "symbols": ["left_section"], "postprocess": (d) => d[0]},
+    {"name": "primary", "symbols": ["right_section"], "postprocess": (d) => d[0]},
     {"name": "primary", "symbols": [{"literal":"("}, "_", "expression", "_", {"literal":")"}], "postprocess": (d) => d[2]},
     {"name": "primary", "symbols": ["list_literal"], "postprocess": (d) => parsePrimary({type: "list", body: d[0].elements, start: d[0].start, end: d[0].end })},
     {"name": "primary", "symbols": ["composition_expression"], "postprocess": (d) => d[0]},

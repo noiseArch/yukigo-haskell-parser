@@ -1,5 +1,6 @@
 import { YukigoHaskellParser } from "../src/index.js";
 import { assert } from "chai";
+import { inspect } from "util";
 
 import {
   application,
@@ -67,7 +68,7 @@ describe("Parser Tests", () => {
           unguardedbody(
             expression(
               application(
-                expression(symbolPrimitive("+")),
+                expression(symbolPrimitive("Plus")),
                 expression(numberPrimitive(1))
               )
             )
@@ -88,7 +89,7 @@ describe("Parser Tests", () => {
                 expression(symbolPrimitive("flip")),
                 expression(
                   application(
-                    expression(symbolPrimitive("+")),
+                    expression(symbolPrimitive("Plus")),
                     expression(numberPrimitive(1))
                   )
                 )

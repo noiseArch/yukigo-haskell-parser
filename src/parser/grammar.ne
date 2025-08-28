@@ -18,6 +18,9 @@ import {
 import { 
   constraint, 
   typeAlias,
+  expression,
+  symbolPrimitive,
+  application,
   listType,
   tupleType
 } from "yukigo-core"
@@ -79,6 +82,28 @@ application -> primary (_ primary):* {% (d) => {
     return d[1].reduce((left, right) => parseApplication([left, right[1]]), d[0]);
 } %}
 
+operator -> 
+    "==" {% (d) => "Equal" %}
+    | "/=" {% (d) => "NotEqual" %}
+    | "<" {% (d) => "LessThan" %}
+    | ">" {% (d) => "GreaterThan" %}
+    | "<=" {% (d) => "LessOrEqualThan" %}
+    | ">=" {% (d) => "GreaterOrEqualThan" %}
+    | "+" {% (d) => "Plus" %}
+    | "-" {% (d) => "Minus" %}
+    | "*" {% (d) => "Multiply" %}
+    | "/" {% (d) => "Divide" %}
+
+left_section -> "(" _ expression _ operator _ ")" {% (d) => application(expression(symbolPrimitive(d[4])), d[2]) %}
+
+right_section -> "(" _ operator _ expression _ ")" {% (d) => {
+    const innerApp = expression(application(expression(symbolPrimitive(d[2])), d[4]));
+    const flipBody = expression(symbolPrimitive("flip"));
+
+    return application(flipBody, innerApp);
+  }
+%}
+
 primary ->
     %number {% (d) => parsePrimary(d[0]) %}
     | %char {% (d) => parsePrimary(d[0]) %}
@@ -87,6 +112,8 @@ primary ->
     | variable {% (d) => d[0] %}
     | constr {% (d) => d[0] %}
     | tuple_expression {% (d) => d[0] %}
+    | left_section {% (d) => d[0] %}
+    | right_section {% (d) => d[0] %}
     | "(" _ expression _ ")" {% (d) => d[2] %}
     | list_literal {% (d) => parsePrimary({type: "list", body: d[0].elements, start: d[0].start, end: d[0].end }) %}
     | composition_expression {% (d) => d[0] %}
