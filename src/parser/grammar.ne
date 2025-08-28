@@ -22,7 +22,9 @@ import {
   symbolPrimitive,
   application,
   listType,
-  tupleType
+  tupleType,
+  typeApplication,
+  typeCast
 } from "yukigo-core"
 
 const filter = d => {
@@ -39,7 +41,15 @@ declaration -> ((function_declaration) | (function_type_declaration _ EOL) | (ty
 
 emptyline -> _ EOL {% (d) => null %}
 
-expression -> apply_operator {% (d) => parseExpression(d[0]) %}
+expression -> type_cast {% (d) => parseExpression(d[0]) %}
+
+type_cast -> apply_operator _ "::" _ type {% (d) => 
+    typeCast(
+        d[4],
+        expression(d[0]), 
+    )
+%}
+| apply_operator {% (d) => d[0] %}
 
 # Operation rules
 
@@ -266,14 +276,15 @@ type_declaration -> "type" __ constr (__ variable_list):? _ "=" _ type {% (d) =>
 
 variable_list -> variable (__ variable):* {% (d) => [d[0].value, ...d[1].map(x => x[1].value)] %}
 
-type -> function_type {% (d) => d[0] %}
+type -> function_type {% d => d[0] %}
 
 constrained_type -> 
-  constraint_list _ %arrow _ type {% (d) => ({
-    type: "ConstrainedType",
-    constraints: d[0].map(c => c.className),
-    body: d[4]
-  }) %}
+    constraint_list _ %arrow _ type {% (d) => ({
+        type: "ParameterizedType",
+        inputs: [],
+        return: d[4],
+        constraints: d[0]
+    }) %}
 
 context -> 
   constraint {% (d) => [d[0]] %}
@@ -288,27 +299,33 @@ constraint ->
   %typeClass (_ application_type):+ {% (d) => constraint(d[0].value, d[1].map(x => x[1])) %}
 
 function_type ->
-  (context _ %arrow _):? (application_type _ %typeArrow _):* application_type {% (d) => (
-    d[1].length > 0
-    ? {
-      type: "ParameterizedType",
-      inputs: d[1].map(x => x[0]),
-      return: d[2],
-      constraints: d[0] ? d[0][0] : []
-    }
-    : d[2]
-  ) %}
+    (context _ %arrow _):? (application_type _ %typeArrow _):* application_type {% (d) => {
+        const constraints = d[0] ? d[0][0] : [];
+        
+        if (d[1].length > 0) {
+            return {
+                type: "ParameterizedType",
+                inputs: d[1].map(x => x[0]),
+                return: d[2],
+                constraints: constraints
+            };
+        }
+
+        if (constraints.length === 0) {
+            return d[2];
+        }
+
+        return {
+            type: "ParameterizedType",
+            inputs: [],
+            return: d[d.length - 1],
+            constraints: constraints
+        };
+    } %}
 
 application_type ->
-  simple_type (_ simple_type):* {% (d) =>
-    d[1].length === 0
-    ? d[0]
-    : {
-      type: "SimpleType",
-      value: d[0].identifier,
-      constraints: [],
-    }
-  %}
+  simple_type (_ simple_type):+ {% (d) => d[1].reduce((acc, arg) => typeApplication(acc, arg[1]), d[0]) %}
+  | simple_type {% (d) => d[0] %}
 
 simple_type ->
     type_variable {% (d) => ({
@@ -321,8 +338,8 @@ simple_type ->
         value: d[0].value,
         constraints: [],
     }) %}
-  | "[" _ type _ "]" {% (d) => listType(d[2]) %}
-  | "(" _ type (_ "," _ type):+ _ ")" {% (d) => tupleType([d[2], ...d[3].map(x => x[3])]) %}
+  | "[" _ type _ "]" {% (d) => listType(d[2], []) %}
+  | "(" _ type (_ "," _ type):+ _ ")" {% (d) => tupleType([d[2], ...d[3].map(x => x[3])], []) %}
   | "(" _ type _ ")" {% (d) => d[2] %}
 
 type_variable -> variable {% (d) => ({ value: d[0].value }) %}

@@ -42,6 +42,7 @@ export const HaskellLexerConfig = {
     match: /[A-Z][a-zA-Z0-9']*/,
     type: moo.keywords({
       typeClass: [
+        "Foldable",
         "Bounded",
         "Enum",
         "Eq",

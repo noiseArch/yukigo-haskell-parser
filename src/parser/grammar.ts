@@ -45,7 +45,9 @@ import {
   symbolPrimitive,
   application,
   listType,
-  tupleType
+  tupleType,
+  typeApplication,
+  typeCast
 } from "yukigo-core"
 
 const filter = d => {
@@ -99,7 +101,14 @@ const grammar: Grammar = {
     {"name": "declaration$subexpression$1", "symbols": ["declaration$subexpression$1$subexpression$5"]},
     {"name": "declaration", "symbols": ["declaration$subexpression$1"], "postprocess": (d) =>  d[0][0][0]},
     {"name": "emptyline", "symbols": ["_", "EOL"], "postprocess": (d) => null},
-    {"name": "expression", "symbols": ["apply_operator"], "postprocess": (d) => parseExpression(d[0])},
+    {"name": "expression", "symbols": ["type_cast"], "postprocess": (d) => parseExpression(d[0])},
+    {"name": "type_cast", "symbols": ["apply_operator", "_", {"literal":"::"}, "_", "type"], "postprocess":  (d) => 
+        typeCast(
+            d[4],
+            expression(d[0]), 
+        )
+        },
+    {"name": "type_cast", "symbols": ["apply_operator"], "postprocess": (d) => d[0]},
     {"name": "apply_operator", "symbols": ["cons_expression", "_", {"literal":"$"}, "_", "apply_operator"], "postprocess": (d) => parseApplication([d[0], d[4]])},
     {"name": "apply_operator", "symbols": ["cons_expression"], "postprocess": (d) => d[0]},
     {"name": "cons_expression", "symbols": ["concatenation", "_", {"literal":":"}, "_", "cons_expression"], "postprocess":  (d) => ({
@@ -324,11 +333,12 @@ const grammar: Grammar = {
     {"name": "variable_list$ebnf$1$subexpression$1", "symbols": ["__", "variable"]},
     {"name": "variable_list$ebnf$1", "symbols": ["variable_list$ebnf$1", "variable_list$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
     {"name": "variable_list", "symbols": ["variable", "variable_list$ebnf$1"], "postprocess": (d) => [d[0].value, ...d[1].map(x => x[1].value)]},
-    {"name": "type", "symbols": ["function_type"], "postprocess": (d) => d[0]},
+    {"name": "type", "symbols": ["function_type"], "postprocess": d => d[0]},
     {"name": "constrained_type", "symbols": ["constraint_list", "_", (HSLexer.has("arrow") ? {type: "arrow"} : arrow), "_", "type"], "postprocess":  (d) => ({
-          type: "ConstrainedType",
-          constraints: d[0].map(c => c.className),
-          body: d[4]
+            type: "ParameterizedType",
+            inputs: [],
+            return: d[4],
+            constraints: d[0]
         }) },
     {"name": "context", "symbols": ["constraint"], "postprocess": (d) => [d[0]]},
     {"name": "context", "symbols": [{"literal":"("}, "_", "constraint_list", "_", {"literal":")"}], "postprocess": (d) => d[2]},
@@ -349,28 +359,35 @@ const grammar: Grammar = {
     {"name": "function_type$ebnf$2", "symbols": []},
     {"name": "function_type$ebnf$2$subexpression$1", "symbols": ["application_type", "_", (HSLexer.has("typeArrow") ? {type: "typeArrow"} : typeArrow), "_"]},
     {"name": "function_type$ebnf$2", "symbols": ["function_type$ebnf$2", "function_type$ebnf$2$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "function_type", "symbols": ["function_type$ebnf$1", "function_type$ebnf$2", "application_type"], "postprocess":  (d) => (
-          d[1].length > 0
-          ? {
-            type: "ParameterizedType",
-            inputs: d[1].map(x => x[0]),
-            return: d[2],
-            constraints: d[0] ? d[0][0] : []
-          }
-          : d[2]
-        ) },
-    {"name": "application_type$ebnf$1", "symbols": []},
+    {"name": "function_type", "symbols": ["function_type$ebnf$1", "function_type$ebnf$2", "application_type"], "postprocess":  (d) => {
+            const constraints = d[0] ? d[0][0] : [];
+            
+            if (d[1].length > 0) {
+                return {
+                    type: "ParameterizedType",
+                    inputs: d[1].map(x => x[0]),
+                    return: d[2],
+                    constraints: constraints
+                };
+            }
+        
+            if (constraints.length === 0) {
+                return d[2];
+            }
+        
+            return {
+                type: "ParameterizedType",
+                inputs: [],
+                return: d[d.length - 1],
+                constraints: constraints
+            };
+        } },
     {"name": "application_type$ebnf$1$subexpression$1", "symbols": ["_", "simple_type"]},
-    {"name": "application_type$ebnf$1", "symbols": ["application_type$ebnf$1", "application_type$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "application_type", "symbols": ["simple_type", "application_type$ebnf$1"], "postprocess":  (d) =>
-        d[1].length === 0
-        ? d[0]
-        : {
-          type: "SimpleType",
-          value: d[0].identifier,
-          constraints: [],
-        }
-          },
+    {"name": "application_type$ebnf$1", "symbols": ["application_type$ebnf$1$subexpression$1"]},
+    {"name": "application_type$ebnf$1$subexpression$2", "symbols": ["_", "simple_type"]},
+    {"name": "application_type$ebnf$1", "symbols": ["application_type$ebnf$1", "application_type$ebnf$1$subexpression$2"], "postprocess": (d) => d[0].concat([d[1]])},
+    {"name": "application_type", "symbols": ["simple_type", "application_type$ebnf$1"], "postprocess": (d) => d[1].reduce((acc, arg) => typeApplication(acc, arg[1]), d[0])},
+    {"name": "application_type", "symbols": ["simple_type"], "postprocess": (d) => d[0]},
     {"name": "simple_type", "symbols": ["type_variable"], "postprocess":  (d) => ({
             type: "SimpleType",
             value: d[0].value,
@@ -381,12 +398,12 @@ const grammar: Grammar = {
             value: d[0].value,
             constraints: [],
         }) },
-    {"name": "simple_type", "symbols": [{"literal":"["}, "_", "type", "_", {"literal":"]"}], "postprocess": (d) => listType(d[2])},
+    {"name": "simple_type", "symbols": [{"literal":"["}, "_", "type", "_", {"literal":"]"}], "postprocess": (d) => listType(d[2], [])},
     {"name": "simple_type$ebnf$1$subexpression$1", "symbols": ["_", {"literal":","}, "_", "type"]},
     {"name": "simple_type$ebnf$1", "symbols": ["simple_type$ebnf$1$subexpression$1"]},
     {"name": "simple_type$ebnf$1$subexpression$2", "symbols": ["_", {"literal":","}, "_", "type"]},
     {"name": "simple_type$ebnf$1", "symbols": ["simple_type$ebnf$1", "simple_type$ebnf$1$subexpression$2"], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "simple_type", "symbols": [{"literal":"("}, "_", "type", "simple_type$ebnf$1", "_", {"literal":")"}], "postprocess": (d) => tupleType([d[2], ...d[3].map(x => x[3])])},
+    {"name": "simple_type", "symbols": [{"literal":"("}, "_", "type", "simple_type$ebnf$1", "_", {"literal":")"}], "postprocess": (d) => tupleType([d[2], ...d[3].map(x => x[3])], [])},
     {"name": "simple_type", "symbols": [{"literal":"("}, "_", "type", "_", {"literal":")"}], "postprocess": (d) => d[2]},
     {"name": "type_variable", "symbols": ["variable"], "postprocess": (d) => ({ value: d[0].value })},
     {"name": "type_constructor", "symbols": ["constr"], "postprocess": (d) => ({ value: d[0].value })},

@@ -131,8 +131,6 @@ describe("TypeChecker Tests", () => {
   it("accepts type alias with parameterized types", () => {
     const code = `type Pair a b = (a, b)\r\nf :: Pair Int String -> Int\nf (x, y) = x`;
     parser.parse(code);
-    console.log(parser.errors)
-
     assert.isEmpty(parser.errors);
   });
 

@@ -13,9 +13,12 @@ import {
   listType,
   literalPattern,
   numberPrimitive,
+  parameterizedType,
   stringPrimitive,
   symbolPrimitive,
   typeAlias,
+  typeApplication,
+  typeCast,
   typeCon,
   typeSig,
   unguardedbody,
@@ -102,39 +105,86 @@ describe("Parser Tests", () => {
   });
   it("parses type restrictions", () => {
     assert.deepEqual(parser.parse("f :: Num a => [a] -> [a]"), [
-      typeSig("f", [listType(typeCon("a"))], listType(typeCon("a")), [
-        constraint("Num", [typeCon("a")]),
-      ]),
+      typeSig(
+        "f",
+        [listType(typeCon("a", []), [])],
+        listType(typeCon("a", []), []),
+        [constraint("Num", [typeCon("a", [])])]
+      ),
     ]);
   });
   it("parses multiple type restrictions", () => {
     assert.deepEqual(parser.parse("f :: (Num a, Eq b) => [a] -> [b]"), [
-      typeSig("f", [listType(typeCon("a"))], listType(typeCon("b")), [
-        constraint("Num", [typeCon("a")]),
-        constraint("Eq", [typeCon("b")]),
-      ]),
+      typeSig(
+        "f",
+        [listType(typeCon("a", []), [])],
+        listType(typeCon("b", []), []),
+        [
+          constraint("Num", [typeCon("a", [])]),
+          constraint("Eq", [typeCon("b", [])]),
+        ]
+      ),
     ]);
   });
   it("parses signatures without type restrictions", () => {
     assert.deepEqual(parser.parse("f :: [a] -> [a]"), [
-      typeSig("f", [listType(typeCon("a"))], listType(typeCon("a")), []),
+      typeSig(
+        "f",
+        [listType(typeCon("a", []), [])],
+        listType(typeCon("a", []), []),
+        []
+      ),
     ]);
   });
   it("parses type alias", () => {
     assert.deepEqual(parser.parse("type String = [Char]"), [
-      typeAlias("String", listType(typeCon("Char")), []),
+      typeAlias("String", listType(typeCon("Char", []), []), []),
     ]);
   });
   it("parses type alias with arguments", () => {
     assert.deepEqual(parser.parse("type List a = [a]"), [
-      typeAlias("List", listType(typeCon("a")), ["a"]),
+      typeAlias("List", listType(typeCon("a", []), []), ["a"]),
     ]);
   });
   it("parses inline type annotations", () => {
-    assert.deepEqual(parser.parse("x = 1 :: Int"), []);
+    assert.deepEqual(parser.parse("x = 1 :: Int"), [
+      func(
+        "x",
+        equation(
+          [],
+          unguardedbody(
+            expression(
+              typeCast(typeCon("Int", []), expression(numberPrimitive(1)))
+            )
+          )
+        )
+      ),
+    ]);
   });
   it("parses inline type annotations with restrictions", () => {
-    assert.deepEqual(parser.parse("x = 1 :: (Num a, Foldable t) => t a"), []);
+    assert.deepEqual(parser.parse("x = 1 :: (Num a, Foldable t) => t a"), [
+      func(
+        "x",
+        equation(
+          [],
+          unguardedbody(
+            expression(
+              typeCast(
+                parameterizedType(
+                  [],
+                  typeApplication(typeCon("t", []), typeCon("a", [])),
+                  [
+                    constraint("Num", [typeCon("a", [])]),
+                    constraint("Foldable", [typeCon("t", [])]),
+                  ]
+                ),
+                expression(numberPrimitive(1))
+              )
+            )
+          )
+        )
+      ),
+    ]);
   });
   it("parses chars and single char strings differently", () => {
     assert.notDeepEqual(parser.parse('x = "a"'), parser.parse("x = 'a'"));
