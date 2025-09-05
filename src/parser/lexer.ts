@@ -69,6 +69,9 @@ export const HaskellLexerConfig = {
     match: /[a-z_][a-zA-Z0-9_']*/,
     type: moo.keywords({
       keyword: keywords,
+      primitiveOperator: [
+        "show"
+      ],
     }),
   },
   NL: { match: /\r?\n/, lineBreaks: true },

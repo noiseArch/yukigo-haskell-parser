@@ -39,33 +39,19 @@ export const typeMappings: { [key: string]: YukigoPrimitive } = {
   Bool: "YuBoolean",
 };
 
-// Yet to be implemented
-/* export const typeClasses: Map<string, Type[]> = new Map([
+export const typeClasses: Map<string, string[]> = new Map([
   ["Bounded", []],
   ["Enum", []],
-  ["Eq", []],
+  ["Ord", ["YuNumber", "YuString", "YuChar"]],
+  ["Eq", ["YuNumber", "YuString", "YuChar", "YuBoolean"]],
   ["Floating", []],
   ["Fractional", []],
   ["Functor", []],
-  [
-    "Integral",
-    [
-      { type: "TypeConstructor", name: "Int" },
-      { type: "TypeConstructor", name: "Integer" },
-    ],
-  ],
+  ["Integral", []],
   ["Ix", []],
   ["Monad", []],
   ["MonadPlus", []],
-  [
-    "Num",
-    [
-      { type: "TypeConstructor", name: "Int" },
-      { type: "TypeConstructor", name: "Double" },
-      { type: "TypeConstructor", name: "Float" },
-      { type: "TypeConstructor", name: "Integer" },
-    ],
-  ],
+  ["Num", ["YuNumber"]],
   ["Random", []],
   ["RandomGen", []],
   ["Read", []],
@@ -73,4 +59,4 @@ export const typeMappings: { [key: string]: YukigoPrimitive } = {
   ["RealFloat", []],
   ["RealFrac", []],
   ["Show", []],
-]); */
+]);

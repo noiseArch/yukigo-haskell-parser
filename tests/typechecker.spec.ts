@@ -8,7 +8,7 @@ describe("TypeChecker Tests", () => {
     parser = new YukigoHaskellParser();
   });
 
-  it("reports undefined function in type signature", () => {
+  it("reports missing signature for function", () => {
     const code = `g = 1`;
     parser.parse(code);
     assert.include(
@@ -17,132 +17,133 @@ describe("TypeChecker Tests", () => {
     );
   });
 
-  it("reports multiple type signatures for a function", () => {
-    const code = `f :: Int -> Int\nf :: Int -> Int\nf x = x`;
+  it("accepts function with correct type signature", () => {
+    const code = `length' :: [a] -> Int\r\nlength' [] = 0\r\nlength' (_:xs) = 1 + length' xs`;
     parser.parse(code);
-    assert.include(parser.errors, "Function 'f' has multiple type signatures");
+    assert.isEmpty(parser.errors, "Should have no type errors");
   });
 
-  it("reports type alias redefinition", () => {
-    const code = `type Foo = Int\ntype Foo = String`;
+  it("detects return type mismatch", () => {
+    const code = `toInt :: String -> Int\r\ntoInt s = s`;
     parser.parse(code);
-    assert.include(parser.errors, "Type alias 'Foo' is already defined");
-  });
 
-  it("reports record redefinition", () => {
-    const code = `data Bar = Baz\ndata Bar = Qux`;
-    parser.parse(code);
-    assert.include(parser.errors, "Record 'Bar' is already defined");
-  });
-
-  it("reports list with mixed types", () => {
-    const code = `f = [1, 'a']`;
-    parser.parse(code);
     assert.include(
       parser.errors,
-      "TypeError in 'f': List elements must have the same type"
+      "Type error in 'toInt': Cannot unify YuString with YuNumber"
     );
   });
 
-  it("reports type mismatch in if branches", () => {
-    const code = `f x = if x then 1 else 'a'`;
+  it("detects parameter type mismatch", () => {
+    const code = `head' :: [Int] -> Int\r\nhead' (x:_) = x\r\nhead' [] = 0\r\nfirst :: [Char] -> Char\r\nfirst list = head' list`;
     parser.parse(code);
-    assert.include(parser.errors, "Type mismatch");
-  });
 
-  it("reports function arity mismatch", () => {
-    const code = `f :: Int -> Int\nf x y = x + y`;
-    parser.parse(code);
     assert.include(
       parser.errors,
-      "Arity mismatch in function 'f': signature expects 1 arguments, but equation has 2"
+      "Type error in 'first': Cannot apply [YuChar] to function of type [YuNumber] -> YuNumber"
     );
   });
 
-  it("reports infinite type error", () => {
-    const code = `type Foo = Bar\r\ntype Bar = Foo`;
+  it("validates polymorphic function signatures", () => {
+    const code = `id :: a -> a\nid x = x`;
     parser.parse(code);
-    assert.include(parser.errors, "Infinite type detected");
-  });
-
-  it("accepts correct type signature and implementation", () => {
-    const code = `f :: Int -> Int\nf x = x + 1`;
-    parser.parse(code);
-    assert.isEmpty(parser.errors);
-  });
-
-  it("accepts correct type alias", () => {
-    const code = `type Foo = Int\nf :: Foo -> Int\nf x = x + 1`;
-    parser.parse(code);
-    assert.isEmpty(parser.errors);
-  });
-
-  it("accepts tuple with different elements", () => {
-    const code = `f :: (Int, Char)\r\nf = (1, 'a')`;
-    parser.parse(code);
-    assert.isEmpty(parser.errors);
-  });
-
-  it("reports constructor redefinition in record", () => {
-    const code = `data Foo = Bar | Bar`;
-    parser.parse(code);
-    assert.include(parser.errors, "Constructor 'Bar' is already defined");
-  });
-
-  it("accepts correct record usage", () => {
-    const code = `data Foo = Bar Int | Baz String\nf :: Foo -> Int\nf (Bar x) = x\nf (Baz s) = 1`;
-    parser.parse(code);
-    assert.isEmpty(parser.errors);
-  });
-
-  it("reports type variable shadowing in type alias", () => {
-    const code = `type List a = [a]\ntype List a = [Int]`;
-    parser.parse(code);
-    assert.include(parser.errors, "Type alias 'List' is already defined");
-  });
-
-  it("reports nested list type mismatch", () => {
-    const code = `f = [[1], ['a']]`;
-    parser.parse(code);
-    assert.include(
+    assert.isEmpty(
       parser.errors,
-      "TypeError in 'f': List elements must have the same type"
+      "Polymorphic identity function should be valid"
     );
   });
 
-  it("reports tuple arity mismatch in pattern", () => {
-    const code = `f (x, y) = x\nf (x, y, z) = x`;
+  it("detects incorrect polymorphic usage", () => {
+    const code = `id :: a -> a\nid x = x + "not polymorphic"`;
     parser.parse(code);
+
     assert.include(
       parser.errors,
-      "Tuple arity mismatch. Expected 2 elements and got 3"
+      "Type error in 'id': Right operand of Plus must be a number"
     );
   });
 
-  it("reports record constructor argument mismatch", () => {
-    const code = `data Foo = Bar Int | Baz String\r\nf = Bar 'a'`;
+  it("validates typeclass constraints", () => {
+    const code = `f :: Num a => a -> a\r\nf x = x + 2`;
+    const ast = parser.parse(code);
+    assert.isEmpty(parser.errors, "Should accept valid Show constraint");
+  });
+
+  it("detects incorrect typeclass constraints", () => {
+    const code = `f :: Num a => a -> a\r\nf x = x ++ "2"`;
     parser.parse(code);
     assert.include(
       parser.errors,
-      "Cannot apply YuChar to function expecting YuNumber"
+      "Type error in 'f': Type 'YuString' is not an instance of 'Num'"
+    );
+  });
+  it("detects arithmetic type errors", () => {
+    const code = `invalidAdd = "text" + 42`;
+    parser.parse(code);
+
+    assert.include(
+      parser.errors,
+      "Type error inferring 'invalidAdd': Left operand of Plus must be a number"
     );
   });
 
-  it("accepts type alias with parameterized types", () => {
-    const code = `type Pair a b = (a, b)\r\nf :: Pair Int String -> Int\nf (x, y) = x`;
+  it("validates higher-order function types", () => {
+    const code = `apply :: (a -> b) -> a -> b\napply f x = f x`;
     parser.parse(code);
-    assert.isEmpty(parser.errors);
+    assert.isEmpty(parser.errors, "Should accept valid higher-order function");
   });
 
-  it("accepts function with constraints", () => {
-    const code = `f :: Num a => a -> a\nf x = x + 1`;
+  it("detects higher-order function misuse", () => {
+    const code = `apply :: (Int -> String) -> Int -> String\napply f x = f (x + "error")`;
     parser.parse(code);
-    assert.isEmpty(parser.errors);
+
+    assert.include(
+      parser.errors,
+      "Type error in 'apply': Right operand of Plus must be a number"
+    );
   });
 
-  it("accepts correct tuple usage", () => {
-    const code = `f :: (Int, Int)\r\nf = (1, 2)`;
+  it("validates recursive function types", () => {
+    const code = `factorial :: Int -> Int\nfactorial 0 = 1\nfactorial n = n * factorial (n - 1)`;
     parser.parse(code);
-    assert.isEmpty(parser.errors);
+    assert.isEmpty(parser.errors, "Should accept valid recursive function");
+  });
+
+  it("detects recursive type errors", () => {
+    const code = `badFactorial :: Int -> String\nbadFactorial 0 = "1"\nbadFactorial n = n * badFactorial (n - 1)`;
+    parser.parse(code);
+    assert.include(
+      parser.errors,
+      "Type error in 'badFactorial': Cannot unify YuNumber with YuString"
+    );
+  });
+
+  it("validates data constructor types", () => {
+    const code = `data Maybe a = Nothing | Just a\nfromMaybe :: a -> Maybe a -> a\nfromMaybe d Nothing = d\nfromMaybe _ (Just x) = x`;
+    parser.parse(code);
+
+    assert.isEmpty(parser.errors, "Should accept valid Maybe implementation");
+  });
+
+  it("detects data constructor type errors", () => {
+    const code = `data Foo = Bar String | Baz\r\nf :: Int -> Foo\r\nf x = Bar x`;
+    parser.parse(code);
+    assert.include(
+      parser.errors,
+      "Type error in 'f': Cannot apply YuNumber to function of type YuString -> Foo t1"
+    );
+  });
+
+  it("handles multiple type errors", () => {
+    const code = `f :: Int -> String\nf x = x + "error"\ng = 42`;
+    parser.parse(code);
+    assert.equal(parser.errors.length, 2);
+    assert.include(
+      parser.errors,
+      "Function 'g' is defined but has no signature"
+    );
+    assert.include(
+      parser.errors,
+      "Type error in 'f': Right operand of Plus must be a number"
+    );
   });
 });

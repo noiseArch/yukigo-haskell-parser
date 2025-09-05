@@ -5,8 +5,6 @@ import {
   traverse,
   Function,
   TypeAlias,
-  SimpleType,
-  ParameterizedType,
   Pattern,
   TypeSignature,
   ArithmeticOperation,
@@ -22,220 +20,61 @@ import {
   ComparisonOperation,
   StringOperation,
   Lambda,
-  Constructor,
+  Primitive,
+  Equation,
+  Constraint as YukigoConstraint,
+  Type as YukigoType,
+  isYukigoPrimitive,
 } from "yukigo-core";
-import { Type } from "yukigo-core";
-import { typeMappings } from "./utils/types.js";
+import { typeClasses, typeMappings } from "./utils/types.js";
+import { inspect } from "util";
 
-type Substitution = Map<string, Type>;
-
-// big ahh class down here -_-
-
-function formatType(type: Type): string {
-  switch (type.type) {
-    case "TypeVar":
-    case "SimpleType":
-      return type.value;
-    case "ParameterizedType":
-      const args = type.inputs.map((t) => formatType(t)).join(" -> ");
-      return `(${args}) -> ${formatType(type.return)}`;
-    case "TupleType":
-      return `(${type.values.map((t) => formatType(t)).join(", ")})`;
-    case "ListType":
-      return `[${formatType(type.values)}]`;
-    case "ConstrainedType":
-    default:
-      return JSON.stringify(type);
-  }
+interface TypeVar {
+  type: "TypeVar";
+  id: number;
+  name?: string;
+  constraints: string[];
 }
 
-function freshTypeVariable(counter: number): Type {
-  const type: Type = {
-    type: "TypeVar",
-    value: `T${counter}`,
-    constraints: [],
-  };
-  return type;
+interface TypeConstructor {
+  type: "TypeConstructor";
+  name: string;
+  args: Type[];
 }
 
-function applySubstitution(type: Type, sub: Substitution): Type {
-  const substituteNode = (t: Type): Type => {
-    if (t.type === "SimpleType") {
-      const typeSub = sub.get(t.value);
-      if (typeSub) {
-        return applySubstitution(typeSub, sub);
-      }
-    }
-    return t;
-  };
-  return walkTypeNode(type, substituteNode);
+interface TypeScheme {
+  type: "TypeScheme";
+  quantifiers: number[];
+  body: Type;
+  constraints: Map<number, string[]>;
 }
 
-function walkTypeNode(type: Type, callback: (node: Type) => Type): Type {
-  const result = callback(type);
-  switch (result.type) {
-    case "ParameterizedType":
-      return {
-        ...result,
-        inputs: result.inputs.map((t) => walkTypeNode(t, callback)),
-        return: walkTypeNode(result.return, callback),
-      };
-    case "ListType":
-      return {
-        ...result,
-        values: walkTypeNode(result.values, callback),
-      };
-    case "TupleType":
-      return {
-        ...result,
-        values: result.values.map((t) => walkTypeNode(t, callback)),
-      };
-    default:
-      return result;
-  }
-}
+type Type = TypeVar | TypeConstructor;
+
+type Environment = Map<string, TypeScheme>;
+
+type Substitution = Map<number, Type>;
+
+type Result<T> =
+  | { success: true; value: T }
+  | { success: false; error: string };
 
 export class TypeChecker {
   private errors: string[] = [];
-  private signatureMap = new Map<string, SimpleType | ParameterizedType>();
-  private recordMap = new Map<string, SimpleType>();
+  private nextVarId = 0;
+  private signatureMap = new Map<string, TypeScheme>();
+  private recordMap = new Map<string, Type>();
   private typeAliasMap = new Map<string, Type>();
-  private typeVarCounter = 0;
-  private inferer: Inferer;
-
-  constructor() {
-    this.inferer = new Inferer({
-      errors: this.errors,
-      typeEquals: this.typeEquals.bind(this),
-      unify: this.unify.bind(this),
-      resolveTypeAlias: this.resolveTypeAlias.bind(this),
-      signatureMap: this.signatureMap,
-      recordMap: this.recordMap,
-      typeAliasMap: this.typeAliasMap,
-    });
-  }
 
   public check(ast: AST): string[] {
+    this.errors = [];
+    this.nextVarId = 0;
+    this.signatureMap.clear();
+    this.recordMap.clear();
+    this.typeAliasMap.clear();
+
     this.buildGlobalEnvironment(ast);
-    traverse(ast, {
-      Function: (node: Function) => {
-        // search function signature
-        const functionName = node.identifier.value;
-        const functionType: Type | undefined =
-          this.signatureMap.get(functionName);
-
-        let returnType: Type;
-        let paramTypes: Type[];
-
-        if (functionType) {
-          returnType =
-            functionType.type === "SimpleType"
-              ? this.mapTypeNodePrimitives(functionType)
-              : this.mapTypeNodePrimitives(functionType.return);
-          // resolve param types
-          paramTypes =
-            functionType.type === "SimpleType"
-              ? []
-              : functionType.inputs.map((t) => this.mapTypeNodePrimitives(t));
-        } else {
-          this.errors.push(
-            `Function '${functionName}' is defined but has no signature`
-          );
-        }
-
-        for (const func of node.equations) {
-          const substitutions: Substitution = new Map();
-          const symbolMap = new Map<string, Type>();
-
-          if (!paramTypes) {
-            paramTypes = func.patterns.map(() =>
-              freshTypeVariable(this.typeVarCounter++)
-            );
-          }
-
-          if (paramTypes) {
-            if (func.patterns.length !== paramTypes.length) {
-              this.errors.push(`Function '${functionName}' has arity mismatch`);
-              continue;
-            }
-            func.patterns.forEach((param, i) => {
-              this.resolvePatterns(param, symbolMap, paramTypes, i);
-            });
-          }
-          let subReturnType: Type;
-          let subInferredType: Type;
-          // infer the return expression
-          if (!Array.isArray(func.body)) {
-            // function body doesnt have guards
-            const funcInferredType = this.inferer.inferType(
-              func.body.expression.body,
-              symbolMap,
-              substitutions
-            );
-
-            subInferredType = applySubstitution(
-              funcInferredType,
-              substitutions
-            );
-            subReturnType = returnType
-              ? applySubstitution(returnType, substitutions)
-              : subInferredType;
-
-            if (!returnType) returnType = subReturnType;
-            if (!paramTypes)
-              paramTypes = Array.from(symbolMap).map((t) => t[1]);
-          } else {
-            // function body has guards, checks for each if it has a valid condition and its return expr
-            for (const guard of func.body) {
-              const guardBody = guard.condition.body;
-
-              const isOtherwise =
-                guardBody.type === "YuSymbol" &&
-                guardBody.value === "otherwise";
-
-              const guardInferredType: Type = isOtherwise
-                ? { type: "SimpleType", value: "YuBoolean", constraints: [] }
-                : this.inferer.inferType(guardBody, symbolMap, substitutions);
-
-              if (
-                guardInferredType.type !== "SimpleType" ||
-                guardInferredType.value !== "YuBoolean"
-              ) {
-                this.errors.push(
-                  `Guard condition must evaluate to a boolean (YuBoolean), but found ${formatType(
-                    guardInferredType
-                  )}`
-                );
-                return;
-              }
-              const funcInferredType = this.inferer.inferType(
-                guard.body.body,
-                symbolMap,
-                substitutions
-              );
-              subInferredType = applySubstitution(
-                funcInferredType,
-                substitutions
-              );
-              subReturnType = returnType
-                ? applySubstitution(returnType, substitutions)
-                : subInferredType;
-              if (!returnType) returnType = subReturnType;
-              if (!paramTypes)
-                paramTypes = Array.from(symbolMap).map((t) => t[1]);
-            }
-          }
-          // unify signature return type with inferred type
-          if (!this.typeEquals(subReturnType, subInferredType)) {
-            this.errors.push(
-              `Type mismatch in '${functionName}': Expected ${formatType(
-                subReturnType
-              )} but got ${formatType(subInferredType)}`
-            );
-          }
-        }
-      },
-    });
+    this.typeCheck(ast);
     return this.errors;
   }
 
@@ -243,851 +82,1150 @@ export class TypeChecker {
     traverse(ast, {
       TypeAlias: (node: TypeAlias) => {
         const typeAliasIdentifier = node.identifier.value;
-        if (this.typeAliasMap.has(typeAliasIdentifier)) {
-          this.errors.push(
-            `Type alias '${typeAliasIdentifier}' is already defined`
-          );
-
+        if (
+          this.typeAliasMap.has(typeAliasIdentifier) ||
+          this.recordMap.has(typeAliasIdentifier)
+        ) {
+          this.errors.push(`Multiple declaration of '${typeAliasIdentifier}'.`);
           return;
         }
-        const resolvedType = this.mapTypeNodePrimitives(node.value);
-        this.typeAliasMap.set(typeAliasIdentifier, resolvedType);
+
+        const { type, constraints } = this.toType(node.value);
+        this.typeAliasMap.set(typeAliasIdentifier, type);
       },
       Record: (node: Record) => {
         const recordIdentifier = node.name.value;
-        if (this.recordMap.has(recordIdentifier)) {
-          this.errors.push(`Record '${recordIdentifier}' is already defined`);
+        if (
+          this.typeAliasMap.has(recordIdentifier) ||
+          this.recordMap.has(recordIdentifier)
+        ) {
+          this.errors.push(`Multiple declaration of '${recordIdentifier}'.`);
           return;
         }
-        // check multiple declaration of constructors
-        // resolve and save types of constructors in recordMap
-        try {
-          const resolvedConstructors = [];
-          for (const cons of node.contents) {
-            if (this.signatureMap.has(cons.name)) {
-              this.errors.push(`Constructor '${cons.name}' is already defined`);
-              return;
-            }
-            const resCons: Constructor = {
-              name: cons.name,
-              fields: cons.fields.map((field) => ({
-                type: "Field",
-                name: field.name,
-                value: this.mapTypeNodePrimitives(field.value),
-              })),
-            };
-            resolvedConstructors.push(resCons);
 
-            const constructorFuncType: ParameterizedType = {
-              type: "ParameterizedType",
-              inputs: resCons.fields.map((field) => field.value),
-              return: {
-                type: "SimpleType",
-                value: recordIdentifier,
-                constraints: [],
-              },
-              constraints: [],
-            };
+        // Save the record type itself
+        const recordType: TypeConstructor = {
+          type: "TypeConstructor",
+          name: recordIdentifier,
+          args: [],
+        };
+        this.recordMap.set(recordIdentifier, recordType);
 
-            this.signatureMap.set(resCons.name, constructorFuncType);
-            resCons.fields.forEach(
-              (field) =>
-                field.name &&
-                this.signatureMap.set(field.name.value, {
-                  type: "ParameterizedType",
-                  inputs: [
-                    {
-                      type: "SimpleType",
-                      value: recordIdentifier,
-                      constraints: [],
-                    },
-                  ],
-                  return: field.value,
-                  constraints: [],
-                })
-            );
+        // Add constructors to signature map as type schemes
+        for (const cons of node.contents) {
+          if (this.signatureMap.has(cons.name)) {
+            this.errors.push(`Constructor '${cons.name}' is already defined`);
+            continue;
           }
-          const record: SimpleType = {
-            type: "SimpleType",
-            value: recordIdentifier,
-            constraints: [],
+          const paramTypes = cons.fields.map((field) =>
+            this.toType(field.value)
+          );
+          const returnType: TypeConstructor = {
+            type: "TypeConstructor",
+            name: recordIdentifier,
+            args: paramTypes.map(() => this.freshVar()),
           };
-          this.recordMap.set(recordIdentifier, record);
-        } catch (e) {
-          this.errors.push(`In record '${recordIdentifier}': ${e.message}`);
+
+          const funcType: Type = paramTypes.reduceRight(
+            (acc, param) => ({
+              type: "TypeConstructor",
+              name: "->",
+              args: [param.type, acc],
+            }),
+            returnType
+          );
+
+          // Generalize all free variables in the constructor type
+          const scheme = this.generalize(new Map(), funcType);
+          this.signatureMap.set(cons.name, scheme);
         }
       },
       TypeSignature: (node: TypeSignature) => {
         const functionName = node.identifier.value;
-        const functionType = node.body;
         if (this.signatureMap.has(functionName)) {
           this.errors.push(
             `Function '${functionName}' has multiple type signatures`
           );
           return;
         }
-        try {
-          let resolvedInputs = [];
-          let resolvedReturn;
-          if (functionType.type === "ParameterizedType") {
-            resolvedInputs = functionType.inputs.map((t) =>
-              this.mapTypeNodePrimitives(t)
-            );
-            resolvedReturn = functionType.return;
+        const typeVarMap = new Map<string, TypeVar>();
+        const { type, constraints } = this.toType(node.body, typeVarMap);
+        const quantifiers = Array.from(typeVarMap.values()).map((tv) => tv.id);
+        // Signatures are already generalized by the user
+        this.signatureMap.set(functionName, {
+          type: "TypeScheme",
+          quantifiers,
+          body: type,
+          constraints,
+        });
+      },
+    });
+    //console.log(inspect(this.signatureMap, false, null, true));
+  }
+
+  private checkEquation(
+    equation: Equation,
+    funcScheme: TypeScheme,
+    env: Environment
+  ) {
+    const funcType = this.instantiate(funcScheme);
+
+    const returnType = this.getReturnType(funcType);
+    const patternTypes = this.getArgumentTypes(funcType);
+
+    const equationEnv = new Map(env);
+
+    patternTypes.forEach((argType, i) => {
+      this.processPatterns(equation.patterns[i], argType, equationEnv);
+    });
+
+    if (!Array.isArray(equation.body)) {
+      // Handles UnguardedBody case
+      const body = equation.body.expression.body;
+
+      const bodyResult = this.infer(body, equationEnv);
+      if (bodyResult.success === false) throw Error(bodyResult.error);
+      //console.log("checkEquation", bodyResult.value, returnType);
+
+      const sub = this.unify(bodyResult.value, returnType);
+      if (sub.success === false) throw Error(sub.error);
+    } else {
+      // Handles GuardedBody case
+      const boolType: TypeConstructor = {
+        type: "TypeConstructor",
+        name: "YuBoolean",
+        args: [],
+      };
+      for (const guard of equation.body) {
+        // checks if condition expression in guard is a resolves to YuBoolean
+        const condition = this.infer(guard.condition.body, equationEnv);
+        if (condition.success === false) throw Error(condition.error);
+
+        const conditionSub = this.unify(condition.value, boolType);
+        if (conditionSub.success === false) throw Error(conditionSub.error);
+
+        const bodyResult = this.infer(guard.body.body, equationEnv);
+        if (bodyResult.success === false) throw Error(bodyResult.error);
+
+        const sub = this.unify(bodyResult.value, returnType);
+        if (sub.success === false) throw Error(sub.error);
+      }
+    }
+  }
+
+  private getReturnType(type: Type): Type {
+    let t: Type = type;
+    while (
+      t.type === "TypeConstructor" &&
+      t.name === "->" &&
+      t.args.length === 2
+    ) {
+      t = t.args[1];
+    }
+    return t;
+  }
+
+  private getArgumentTypes(type: Type): Type[] {
+    const args: Type[] = [];
+    let t: Type = type;
+    while (
+      t.type === "TypeConstructor" &&
+      t.name === "->" &&
+      t.args.length === 2
+    ) {
+      args.push(t.args[0]);
+      t = t.args[1];
+    }
+    return args;
+  }
+
+  private getArity(type: Type): number {
+    return this.getArgumentTypes(type).length;
+  }
+
+  private typeCheck(ast: AST) {
+    const env: Environment = new Map();
+
+    // Add top-level signatures to environment
+    for (const [name, scheme] of this.signatureMap) {
+      env.set(name, scheme);
+    }
+
+    traverse(ast, {
+      Function: (node: Function) => {
+        const functionName = node.identifier.value;
+        let funcScheme = this.signatureMap.get(functionName);
+
+        // Handle function without signature
+        if (!funcScheme) {
+          this.errors.push(
+            `Function '${functionName}' is defined but has no signature`
+          );
+
+          const firstEq = node.equations[0];
+          const eqEnv = new Map(env);
+          const paramTypes = firstEq.patterns.map(() => this.freshVar());
+          const returnType = this.freshVar();
+
+          paramTypes.forEach((type, i) => {
+            this.processPatterns(firstEq.patterns[i], type, eqEnv);
+          });
+
+          let inferredBodyType: Type;
+          if (!Array.isArray(firstEq.body)) {
+            const bodyResult = this.infer(firstEq.body.expression.body, eqEnv);
+            if (bodyResult.success === false) {
+              this.errors.push(
+                `Type error inferring '${functionName}': ${bodyResult.error}`
+              );
+              return;
+            }
+            inferredBodyType = bodyResult.value;
           } else {
-            resolvedReturn = functionType;
+            // Handle guarded body inference if necessary
+            inferredBodyType = this.freshVar(); // Placeholder
           }
 
-          this.signatureMap.set(functionName, {
-            type: "ParameterizedType",
-            inputs: resolvedInputs,
-            return: resolvedReturn,
-            constraints: [],
-          });
-        } catch (e) {
-          this.errors.push(`In signature for '${functionName}': ${e.message}`);
+          const fullFuncType = paramTypes.reduceRight(
+            (acc, param) =>
+              ({
+                type: "TypeConstructor",
+                name: "->",
+                args: [param, acc],
+              } as TypeConstructor),
+            inferredBodyType
+          );
+
+          // Generalize the inferred type to create a polymorphic type scheme
+          funcScheme = this.generalize(env, fullFuncType);
+          this.signatureMap.set(functionName, funcScheme);
+          env.set(functionName, funcScheme);
+        }
+
+        const expectedArity = this.getArity(this.instantiate(funcScheme));
+        for (const equation of node.equations) {
+          if (equation.patterns.length !== expectedArity) {
+            this.errors.push(`Arity mismatch in function '${functionName}'`);
+            continue;
+          }
+          try {
+            this.checkEquation(equation, funcScheme, new Map(env));
+          } catch (error: any) {
+            this.errors.push(
+              `Type error in '${functionName}': ${error.message}`
+            );
+          }
         }
       },
     });
   }
 
-  // inside TypeChecker
-
-  private unify(t1: Type, t2: Type): Substitution {
-    if (this.typeEquals(t1, t2)) return new Map();
-
-    if (t1.type === "TypeVar") return this.bindVariable(t1.value, t2);
-    if (t2.type === "TypeVar") return this.bindVariable(t2.value, t1);
-
-    if (t1.type === "ParameterizedType" && t2.type === "ParameterizedType") {
-      const sub1 = this.unifyLists(t1.inputs, t2.inputs);
-      const sub2 = this.unify(
-        applySubstitution(t1.return, sub1),
-        applySubstitution(t2.return, sub1)
-      );
-      return new Map([...sub1, ...sub2]);
-    }
-    throw new Error(
-      `Type mismatch: Cannot unify ${formatType(t1)} with ${formatType(t2)}`
-    );
-  }
-
-  private unifyLists(t1: Type[], t2: Type[]): Substitution {
-    if (t1.length !== t2.length) {
-      throw new Error(
-        `Function arity mismatch: Expected ${t1.length} arguments but got ${t2.length}`
-      );
-    }
-    return t1.reduce((sub, curr, i) => {
-      const newSub = this.unify(
-        applySubstitution(curr, sub),
-        applySubstitution(t2[i], sub)
-      );
-      return new Map([...sub, ...newSub]);
-    }, new Map());
-  }
-
-  private typeEquals(a: Type, b: Type): boolean {
-    if (!a || !b || a.type !== b.type) return false;
-    switch (a.type) {
-      case "TypeVar":
-        if (b.type !== "TypeVar") return false;
-        return a.value === b.value;
-      case "SimpleType":
-        if (b.type !== "SimpleType") return false;
-        return a.value === b.value;
-      case "ParameterizedType":
-        if (b.type !== "ParameterizedType") return false;
-        return (
-          this.typeEqualsList(a.inputs, b.inputs) &&
-          this.typeEquals(a.return, b.return)
-        );
-      case "TupleType":
-        if (b.type !== "TupleType") return false;
-        return this.typeEqualsList(a.values, b.values);
-      case "ListType":
-        if (b.type !== "ListType") return false;
-        return this.typeEquals(a.values, b.values);
-      default:
-        return false;
-    }
-  }
-
-  private typeEqualsList(a: Type[], b: Type[]) {
-    let combinedResult = true;
-    for (let i = 0; i < a.length && combinedResult; i++) {
-      const el1 = this.typeEquals(a[i], b[i]);
-      if (!el1) {
-        combinedResult = false;
-        break;
-      }
-    }
-    return combinedResult;
-  }
-
-  private resolveTypeAlias(type: Type, visited: Set<string> = new Set()): Type {
-    switch (type.type) {
-      case "SimpleType": {
-        if (visited.has(type.value)) {
-          this.errors.push(`Cyclic type alias detected: ${formatType(type)}`);
-          throw new Error(`Cyclic type alias detected: ${formatType(type)}`);
-        }
-        if (this.typeAliasMap.has(type.value)) {
-          visited.add(type.value);
-          return this.resolveTypeAlias(
-            this.typeAliasMap.get(type.value)!,
-            visited
-          );
-        }
-        return type;
-      }
-
-      case "ParameterizedType":
-        return {
-          type: "ParameterizedType",
-          inputs: type.inputs.map((t) =>
-            this.resolveTypeAlias(t, new Set(visited))
-          ),
-          return: this.resolveTypeAlias(type.return, new Set(visited)),
-          constraints: [],
-        };
-
-      case "ConstrainedType":
-      default:
-        return type;
-    }
-  }
-
-  private bindVariable(name: string, type: Type): Substitution {
-    if (type.type === "SimpleType" && type.value === name) {
-      // basically if they are the same TypeVar there isnt a need to substitute
-      return new Map();
-    }
-    if (this.isTypeInfinite(name, type)) {
-      this.errors.push(
-        `Infinite type detected: ${name} occurs in ${formatType(type)}`
-      );
-      throw new Error(
-        `Infinite type detected: ${name} occurs in ${formatType(type)}`
-      );
-    }
-    return new Map([[name, type]]);
-  }
-
-  private isTypeInfinite(name: string, type: Type): boolean {
-    switch (type.type) {
-      case "SimpleType":
-        return type.value === name;
-      case "ParameterizedType":
-        return (
-          type.inputs.some((t) => this.isTypeInfinite(name, t)) ||
-          this.isTypeInfinite(name, type.return)
-        );
-      default:
-        return false;
-    }
-  }
-
-  private resolvePatterns(
-    param: Pattern,
-    symbolMap: Map<string, Type>,
-    paramTypes: Type[],
-    i: number
-  ) {
-    switch (param.type) {
-      case "WildcardPattern":
-        break;
-      case "VariablePattern":
-        symbolMap.set(param.name.value, paramTypes[i]);
-        break;
-      case "ConstructorPattern": {
-        const constructorType = this.signatureMap.get(param.constructor);
-        if (constructorType.type === "ParameterizedType")
-          param.patterns.forEach((el, j) =>
-            this.resolvePatterns(
-              el,
-              symbolMap,
-              [...constructorType.inputs, constructorType.return],
-              j
-            )
-          );
-        symbolMap.set(param.constructor, constructorType);
-        break;
-      }
-      case "ListPattern": {
-        const listType = paramTypes[i];
-        if (listType.type === "SimpleType") {
-          param.elements.forEach((el) =>
-            this.resolvePatterns(
-              el,
-              symbolMap,
-              [{ type: "SimpleType", value: listType.value, constraints: [] }],
-              0
-            )
-          );
-        } else {
-          this.errors.push(
-            `Pattern expects a list but found ${formatType(listType)}`
-          );
-        }
-        break;
-      }
-      case "ConsPattern": {
-        const listType = paramTypes[i];
-        if (listType.type === "ListType") {
-          this.resolvePatterns(param.head, symbolMap, [listType.values], 0);
-          if (param.tail.type === "VariablePattern") {
-            this.resolvePatterns(param.tail, symbolMap, [listType], 0);
-          } else {
-            this.resolvePatterns(param.tail, symbolMap, paramTypes, i);
-          }
-        } else {
-          this.errors.push(
-            `Couldn't match expected type '${JSON.stringify(
-              listType
-            )}' with actual ListPattern`
-          );
-        }
-
-        break;
-      }
-      case "AsPattern": {
-        const alias = param.alias;
-        this.resolvePatterns(alias, symbolMap, paramTypes, i);
-        this.resolvePatterns(param.pattern, symbolMap, paramTypes, i);
-        break;
-      }
-      case "TuplePattern": {
-        const tupleParamType = paramTypes[i];
-        if (tupleParamType.type === "TupleType") {
-          param.elements.forEach((pattern, idx) => {
-            this.resolvePatterns(
-              pattern,
-              symbolMap,
-              tupleParamType.values,
-              idx
-            );
-          });
-        } else {
-          this.errors.push(
-            `Pattern expects a tuple but found ${formatType(tupleParamType)}`
-          );
-        }
-        break;
-      }
-      default:
-        break;
-    }
-  }
-
-  private mapTypeNodePrimitives(type: Type): Type {
-    const mapPrimitiveNode = (t: Type): Type => {
-      switch (t.type) {
-        case "SimpleType": {
-          const typeAliasType = this.recordMap.get(t.value);
-          if (typeAliasType) return typeAliasType;
-
-          const recordType = this.recordMap.get(t.value);
-          if (recordType)
-            return { ...t, type: "SimpleType", value: recordType.value };
-
-          const primitiveType = typeMappings[t.value];
-          if (primitiveType !== undefined)
-            return {
-              ...t,
-              type: "SimpleType",
-              value: primitiveType,
-            };
-
-          return t;
-        }
-        default:
-          return t;
-      }
-    };
-    return this.resolveTypeAlias(walkTypeNode(type, mapPrimitiveNode));
-  }
-}
-
-interface InferContext {
-  errors: string[];
-  typeEquals: (a: Type, b: Type) => boolean;
-  resolveTypeAlias: (type: Type, visited: Set<string>) => Type;
-  unify: (a: Type, b: Type) => Substitution;
-  signatureMap: Map<string, Type>;
-  recordMap: Map<string, SimpleType>;
-  typeAliasMap: Map<string, Type>;
-}
-
-class Inferer {
-  private typeVarCounter: number = 0;
-  constructor(private ctx: InferContext) {}
-
-  private get errors() {
-    return this.ctx.errors;
-  }
-  private get typeEquals() {
-    return this.ctx.typeEquals;
-  }
-  private get unify() {
-    return this.ctx.unify;
-  }
-  private get resolveTypeAlias() {
-    return this.ctx.resolveTypeAlias;
-  }
-  private get signatureMap() {
-    return this.ctx.signatureMap;
-  }
-  private get recordMap() {
-    return this.ctx.recordMap;
-  }
-  private get typeAliasMap() {
-    return this.ctx.typeAliasMap;
-  }
-
-  public inferType(
-    node: BodyExpression,
-    symbolMap: Map<string, Type>,
-    substitutions: Substitution
-  ): Type {
-    switch (node.type) {
+  // Core HM algorithm - Algorithm W
+  private infer(expr: BodyExpression, env: Environment): Result<Type> {
+    switch (expr.type) {
       case "YuChar":
       case "YuString":
       case "YuNumber":
       case "YuBoolean":
-        return this.inferPrimitive(node);
-
+        return this.inferPrimitive(expr);
       case "YuList":
-        return this.inferList(node, symbolMap, substitutions);
-
+        return this.inferList(expr, env);
       case "YuSymbol":
-        return this.inferSymbol(node, symbolMap);
+        return this.inferSymbol(expr, env);
 
       case "ArithmeticOperation":
-        return this.inferArithmetic(node, symbolMap, substitutions);
-
-      case "CompositionExpression":
-        return this.inferComposition(node, symbolMap, substitutions);
+        return this.inferArithmetic(expr, env);
 
       case "If":
-        return this.inferIf(node, symbolMap, substitutions);
-
-      case "Application":
-        return this.inferApplication(node, symbolMap, substitutions);
-
-      case "InfixApplication":
-        return this.inferInfixApplication(node, symbolMap, substitutions);
-
-      case "DataExpression":
-        return this.inferDataExpression(node, symbolMap, substitutions);
-
-      case "TupleExpression":
-        return this.inferTuple(node, symbolMap, substitutions);
-
-      case "ConsExpression":
-        return this.inferCons(node, symbolMap, substitutions);
-
-      case "ComparisonOperation":
-        return this.inferComparison(node, symbolMap, substitutions);
-
-      case "StringOperation":
-        return this.inferStringOp(node, symbolMap, substitutions);
+        return this.inferIf(expr, env);
 
       case "Lambda":
-        return this.inferLambda(node, symbolMap, substitutions);
+        return this.inferLambda(expr, env);
+
+      case "Application":
+        return this.inferApplication(expr, env);
+
+      case "CompositionExpression":
+        return this.inferComposition(expr, env);
+
+      case "InfixApplication":
+        return this.inferInfixApplication(expr, env);
+
+      case "DataExpression":
+        return this.inferDataExpression(expr, env);
+
+      case "TupleExpression":
+        return this.inferTuple(expr, env);
+
+      case "ConsExpression":
+        return this.inferCons(expr, env);
+
+      case "ComparisonOperation":
+        return this.inferComparison(expr, env);
+
+      case "StringOperation":
+        return this.inferStringOp(expr, env);
 
       default:
-        this.errors.push(`Unknown node type: ${node.type}`);
-        return { type: "SimpleType", value: "Error", constraints: [] };
+        return {
+          success: false,
+          error: `Unknown expression type: ${expr.type}`,
+        };
     }
   }
 
-  private inferPrimitive(node: BodyExpression): Type {
-    return { type: "SimpleType", value: node.type, constraints: [] };
+  // ===== Core HM Functions =====
+
+  private freshVar(constraints: string[] = []): TypeVar {
+    return { type: "TypeVar", id: this.nextVarId++, constraints };
   }
-  private inferList(
-    node: ListPrimitive,
-    symbolMap: Map<string, Type>,
-    substitutions: Substitution
-  ): Type {
-    const elementTypes = node.elements.map((el) =>
-      this.inferType(el.body, symbolMap, substitutions)
-    );
-    if (elementTypes.length === 0) {
+
+  private freeTypeVars(t: Type): Map<number, string[]> {
+    const freeVars = new Map<number, string[]>();
+    const collect = (type: Type) => {
+      if (type.type === "TypeVar") {
+        freeVars.set(type.id, type.constraints);
+      } else if (type.type === "TypeConstructor") {
+        type.args.forEach(collect);
+      }
+    };
+    collect(t);
+    return freeVars;
+  }
+  private generalize(env: Environment, t: Type): TypeScheme {
+    const envFreeVars = new Set<number>();
+    for (const scheme of env.values()) {
+      const schemeFreeVars = this.freeTypeVars(scheme.body);
+      for (const id of schemeFreeVars.keys()) {
+        if (!scheme.quantifiers.includes(id)) {
+          envFreeVars.add(id);
+        }
+      }
+    }
+
+    const typeFreeVars = this.freeTypeVars(t);
+
+    const quantifiers: number[] = [];
+    const constraints = new Map<number, string[]>();
+
+    for (const [id, consts] of typeFreeVars.entries()) {
+      if (!envFreeVars.has(id)) {
+        quantifiers.push(id);
+        if (consts.length > 0) {
+          constraints.set(id, consts);
+        }
+      }
+    }
+
+    return { type: "TypeScheme", quantifiers, body: t, constraints };
+  }
+
+  private instantiate(scheme: TypeScheme): Type {
+    const substitutions = new Map<number, Type>();
+    scheme.quantifiers.forEach((id) => {
+      const constraints = scheme.constraints.get(id) || [];
+      substitutions.set(id, this.freshVar(constraints));
+    });
+    return this.applySubst(substitutions, scheme.body);
+  }
+
+  private applySubst(subst: Substitution, t: Type): Type {
+    if (t.type === "TypeVar") {
+      const replacement = subst.get(t.id);
+      return replacement ? replacement : t;
+    } else if (t.type === "TypeConstructor") {
       return {
-        type: "ListType",
-        values: freshTypeVariable(this.typeVarCounter++),
-        constraints: [],
+        type: "TypeConstructor",
+        name: t.name,
+        args: t.args.map((arg) => this.applySubst(subst, arg)),
       };
     }
 
-    const first = elementTypes[0];
-    if (!elementTypes.every((t) => this.typeEquals(first, t))) {
-      this.errors.push(
-        `List elements must all be same type. Found: ${formatType(
-          first
-        )} and others`
-      );
-      return { type: "SimpleType", value: "Error", constraints: [] };
+    throw new Error("Unexpected TypeScheme in applySubst");
+  }
+
+  private composeSubst(s1: Substitution, s2: Substitution): Substitution {
+    const result = new Map(s2);
+    for (const [id, type] of s1) {
+      result.set(id, this.applySubst(s2, type));
     }
+    return result;
+  }
+
+  private unify(t1: Type, t2: Type): Result<Substitution> {
+    if (t1.type === "TypeVar") return this.unifyVar(t1, t2);
+    if (t2.type === "TypeVar") return this.unifyVar(t2, t1);
+    if (t1.type === "TypeConstructor" && t2.type === "TypeConstructor") {
+      if (t1.name !== t2.name || t1.args.length !== t2.args.length) {
+        return {
+          success: false,
+          error: `Cannot unify ${this.showType(t1)} with ${this.showType(t2)}`,
+        };
+      }
+      let sub: Substitution = new Map();
+      for (let i = 0; i < t1.args.length; i++) {
+        const arg1 = this.applySubst(sub, t1.args[i]);
+        const arg2 = this.applySubst(sub, t2.args[i]);
+        const argSubRes = this.unify(arg1, arg2);
+        if (!argSubRes.success) return argSubRes;
+        sub = this.composeSubst(sub, argSubRes.value);
+      }
+      return { success: true, value: sub };
+    }
+    return { success: false, error: `Cannot unify non-types` };
+  }
+
+  private unifyVar(v: TypeVar, t: Type): Result<Substitution> {
+    if (t.type === "TypeVar" && t.id === v.id) {
+      return { success: true, value: new Map() };
+    }
+    if (this.occurs(v.id, t)) {
+      return { success: false, error: `Occurs check failed` };
+    }
+
+    // TC REVISED: Check constraints before binding.
+    for (const constraint of v.constraints) {
+      this.checkConstraint(constraint, t);
+    }
+    if (t.type === "TypeVar") {
+      for (const constraint of t.constraints) {
+        this.checkConstraint(constraint, v);
+      }
+      // Merge constraints
+      const mergedConstraints = [
+        ...new Set([...v.constraints, ...t.constraints]),
+      ];
+      v.constraints = mergedConstraints;
+      t.constraints = mergedConstraints;
+    }
+
+    return { success: true, value: new Map([[v.id, t]]) };
+  }
+
+  private checkConstraint(constraintName: string, t: Type) {
+    if (t.type === "TypeVar") {
+      if (!t.constraints.includes(constraintName)) {
+        t.constraints.push(constraintName);
+      }
+    } else if (t.type === "TypeConstructor") {
+      const instances = typeClasses.get(constraintName);
+      if (!instances || !instances.includes(t.name)) {
+        throw new Error(
+          `Type '${this.showType(t)}' is not an instance of '${constraintName}'`
+        );
+      }
+    }
+  }
+
+  private occurs(varId: number, t: Type): boolean {
+    if (t.type === "TypeVar") return t.id === varId;
+    if (t.type === "TypeConstructor")
+      return t.args.some((a) => this.occurs(varId, a));
+    return false;
+  }
+
+  // ===== Expression Type Inference =====
+
+  private inferPrimitive(expr: Primitive): Result<Type> {
+    const typeName = expr.type;
     return {
-      type: "ListType",
-      values: first,
-      constraints: [],
+      success: true,
+      value: {
+        type: "TypeConstructor",
+        name: typeName,
+        args: [],
+      },
     };
   }
-  private inferSymbol(
-    node: SymbolPrimitive,
-    symbolMap: Map<string, Type>
-  ): Type {
-    const symbolValue = node.value;
-    const symbolType =
-      symbolMap.get(symbolValue) ??
-      this.signatureMap.get(symbolValue) ??
-      this.recordMap.get(symbolValue) ??
-      this.typeAliasMap.get(symbolValue);
 
-    if (!symbolType) {
-      this.errors.push(`'${symbolValue}' is not defined in current scope`);
-      return { type: "SimpleType", value: "Error", constraints: [] };
-    }
-    return symbolType;
+  private inferSymbol(expr: SymbolPrimitive, env: Environment): Result<Type> {
+    const name = expr.value;
+    //console.log(env, env.get(name));
+    const scheme = env.get(name) || this.signatureMap.get(name);
+
+    if (!scheme) return { success: false, error: `Unbound variable: ${name}` };
+
+    return { success: true, value: this.instantiate(scheme) };
   }
+
   private inferArithmetic(
-    node: ArithmeticOperation,
-    symbolMap: Map<string, Type>,
-    substitutions: Substitution
-  ): Type {
-    const leftType = this.inferType(node.left.body, symbolMap, substitutions);
-    const rightType = this.inferType(node.right.body, symbolMap, substitutions);
-    const numberType: Type = {
-      type: "SimpleType",
-      value: "YuNumber",
-      constraints: [],
+    expr: ArithmeticOperation,
+    env: Environment
+  ): Result<Type> {
+    const numType: TypeConstructor = {
+      type: "TypeConstructor",
+      name: "YuNumber",
+      args: [],
     };
+    const leftResult = this.infer(expr.left.body, env);
+    const rightResult = this.infer(expr.right.body, env);
 
-    const errorsMessage = `Arithmetic operation requires numbers, got ${formatType(
-      leftType
-    )} and ${formatType(rightType)}`;
-    if (
-      !this.tryUnify(leftType, numberType, substitutions, errorsMessage) ||
-      !this.tryUnify(rightType, numberType, substitutions, errorsMessage)
-    ) {
-      return { type: "SimpleType", value: "Error", constraints: [] };
+    if (!leftResult.success) return leftResult;
+    if (!rightResult.success) return rightResult;
+
+    const unifyLeft = this.unify(leftResult.value, numType);
+    const unifyRight = this.unify(rightResult.value, numType);
+
+    if (!unifyLeft.success) {
+      return {
+        success: false,
+        error: `Left operand of ${expr.operator} must be a number`,
+      };
     }
-    return numberType;
+
+    if (!unifyRight.success) {
+      return {
+        success: false,
+        error: `Right operand of ${expr.operator} must be a number`,
+      };
+    }
+
+    return { success: true, value: numType };
   }
+
+  private inferIf(expr: If, env: Environment): Result<Type> {
+    const boolType: TypeConstructor = {
+      type: "TypeConstructor",
+      name: "YuBoolean",
+      args: [],
+    };
+    const condResult = this.infer(expr.condition.body, env);
+
+    if (!condResult.success) return condResult;
+
+    const condSub = this.unify(condResult.value, boolType);
+    if (!condSub.success) {
+      return { success: false, error: "Condition must be a boolean" };
+    }
+
+    const thenResult = this.infer(expr.then.body, env);
+    const elseResult = this.infer(expr.else.body, env);
+
+    if (!thenResult.success) return thenResult;
+    if (!elseResult.success) return elseResult;
+
+    const unifyResult = this.unify(thenResult.value, elseResult.value);
+    if (!unifyResult.success) {
+      return {
+        success: false,
+        error: `Branch types don't match: ${this.showType(
+          thenResult.value
+        )} vs ${this.showType(elseResult.value)}`,
+      };
+    }
+
+    return thenResult;
+  }
+
+  private inferLambda(expr: Lambda, env: Environment): Result<Type> {
+    // Create fresh type variables for parameters
+    const paramTypes = expr.parameters.map(() => this.freshVar());
+    const newEnv = new Map(env);
+
+    // Add parameters to environment
+    expr.parameters.forEach((param, i) => {
+      if (param.type === "VariablePattern") {
+        newEnv.set(param.name.value, {
+          type: "TypeScheme",
+          quantifiers: [],
+          body: paramTypes[i],
+          constraints: new Map(),
+        });
+      } else if (param.type === "WildcardPattern") {
+        // Wildcards are ignored in environment
+      } else {
+        // For other pattern types, handle accordingly or skip
+      }
+    });
+
+    // Infer body type
+    const bodyResult = this.infer(expr.body.body, newEnv);
+    if (!bodyResult.success) return bodyResult;
+
+    // Construct function type
+    const funcType = paramTypes.reduceRight(
+      (acc, param) =>
+        ({
+          type: "TypeConstructor",
+          name: "->",
+          args: [param, acc],
+        } satisfies TypeConstructor),
+      bodyResult.value
+    );
+
+    return { success: true, value: funcType };
+  }
+
+  private inferApplication(expr: Application, env: Environment): Result<Type> {
+    const funcResult = this.infer(expr.function.body, env);
+    if (funcResult.success === false) return funcResult;
+
+    const argResult = this.infer(
+      expr.parameter.type === "Expression"
+        ? expr.parameter.body
+        : expr.parameter,
+      env
+    );
+    if (argResult.success === false) return argResult;
+
+    const resultType = this.freshVar();
+    const funcType: TypeConstructor = {
+      type: "TypeConstructor",
+      name: "->",
+      args: [argResult.value, resultType],
+    };
+    const unifyResult = this.unify(funcResult.value, funcType);
+    if (unifyResult.success === false) {
+      return {
+        success: false,
+        error: `Cannot apply ${this.showType(
+          argResult.value
+        )} to function of type ${this.showType(funcResult.value)}`,
+      };
+    }
+
+    return { success: true, value: resultType };
+  }
+
   private inferComposition(
-    node: CompositionExpression,
-    symbolMap: Map<string, Type>,
-    substitutions: Substitution
-  ): Type {
-    const funcType1 = this.inferType(node.right.body, symbolMap, substitutions);
-    const funcType2 = this.inferType(node.left.body, symbolMap, substitutions);
+    expr: CompositionExpression,
+    env: Environment
+  ): Result<Type> {
+    const fResult = this.infer(expr.left.body, env);
+    const gResult = this.infer(expr.right.body, env);
 
-    if (
-      funcType1.type !== "ParameterizedType" ||
-      funcType2.type !== "ParameterizedType"
-    ) {
-      this.errors.push(
-        "Function composition requires both operands to be functions"
-      );
-      return { type: "SimpleType", value: "Error", constraints: [] };
-    }
+    if (!fResult.success) return fResult;
+    if (!gResult.success) return gResult;
 
-    const errorsMessage = `Function composition failed. Types: ${formatType(
-      funcType1
-    )} and ${formatType(funcType2)}`;
+    const a = this.freshVar();
+    const b = this.freshVar();
+    const c = this.freshVar();
 
-    if (
-      !this.tryUnify(
-        funcType1.inputs[0],
-        funcType2.return,
-        substitutions,
-        errorsMessage
-      )
-    ) {
-      return { type: "SimpleType", value: "Error", constraints: [] };
-    }
-    return {
-      type: "ParameterizedType",
-      inputs: funcType2.inputs,
-      return: funcType1.return,
-      constraints: [],
+    const fType: TypeConstructor = {
+      type: "TypeConstructor",
+      name: "->",
+      args: [b, c],
     };
-  }
-  private inferIf(
-    node: If,
-    symbolMap: Map<string, Type>,
-    substitutions: Substitution
-  ): Type {
-    const conditionType = this.inferType(
-      node.condition.body,
-      symbolMap,
-      substitutions
-    );
-    const thenType = this.inferType(node.then.body, symbolMap, substitutions);
-    const elseType = this.inferType(node.else.body, symbolMap, substitutions);
 
-    const boolType: Type = {
-      type: "SimpleType",
-      value: "YuBoolean",
-      constraints: [],
+    const gType: TypeConstructor = {
+      type: "TypeConstructor",
+      name: "->",
+      args: [a, b],
     };
-    const errorsMessage = `Type mismatch in if branches: ${formatType(
-      thenType
-    )} vs ${formatType(elseType)}`;
 
-    if (
-      !this.tryUnify(conditionType, boolType, substitutions, errorsMessage) ||
-      !this.tryUnify(thenType, elseType, substitutions, errorsMessage)
-    ) {
-      return { type: "SimpleType", value: "Error", constraints: [] };
+    const fSub = this.unify(fResult.value, fType);
+    const gSub = this.unify(gResult.value, gType);
+
+    if (!fSub.success) {
+      return {
+        success: false,
+        error: "Left operand of composition must be a function",
+      };
     }
 
-    return thenType;
-  }
-  private inferApplication(
-    node: Application,
-    symbolMap: Map<string, Type>,
-    substitutions: Substitution
-  ): Type {
-    const funcType = this.inferType(
-      node.function.body,
-      symbolMap,
-      substitutions
-    );
-    const argType = this.inferType(
-      node.parameter.type === "Expression"
-        ? node.parameter.body
-        : node.parameter,
-      symbolMap,
-      substitutions
-    );
-    // case for function with params
-    if (funcType.type === "ParameterizedType" && funcType.inputs.length > 0) {
-      const expectedArgType = applySubstitution(
-        funcType.inputs[0],
-        substitutions
-      );
-      const errorsMessage = `Cannot apply ${formatType(
-        argType
-      )} to function expecting ${formatType(expectedArgType)}`;
-      if (
-        !this.tryUnify(expectedArgType, argType, substitutions, errorsMessage)
-      ) {
-        return { type: "SimpleType", value: "Error", constraints: [] };
-      }
-
-      // handles application with partial application
-      // in 'add 1 2' => first checks 'add 1' which gives a 'YuNumber -> YuNumber' => then 'YuNumber 2' finally getting YuNumber
-      // in 'add 1' => checks for 'add 1' and resolves a function that expects a YuNumber and returns a YuNumber (YuNumber -> YuNumber)
-      const remainingArgs = funcType.inputs
-        .slice(1)
-        .map((t) => applySubstitution(t, substitutions));
-      const returnType = applySubstitution(funcType.return, substitutions);
-
-      return remainingArgs.length > 0
-        ? {
-            type: "ParameterizedType",
-            inputs: remainingArgs,
-            return: returnType,
-            constraints: [],
-          }
-        : returnType;
-    } else {
-      this.errors.push(
-        `Trying to apply argument to non-function type: ${formatType(funcType)}`
-      );
-      return { type: "SimpleType", value: "Error", constraints: [] };
+    if (!gSub.success) {
+      return {
+        success: false,
+        error: "Right operand of composition must be a function",
+      };
     }
+
+    const composedType: TypeConstructor = {
+      type: "TypeConstructor",
+      name: "->",
+      args: [a, c],
+    };
+
+    return { success: true, value: composedType };
   }
+
   private inferInfixApplication(
-    node: InfixApplicationExpression,
-    symbolMap: Map<string, Type>,
-    substitutions: Substitution
-  ): Type {
-    const left = this.inferType(node.left.body, symbolMap, substitutions);
-    const right = this.inferType(node.right.body, symbolMap, substitutions);
-    const opType = this.signatureMap.get(node.operator.value);
-
-    if (!opType || opType.type !== "ParameterizedType") {
-      this.errors.push(`Unknown infix operator: ${node.operator}`);
-      return { type: "SimpleType", value: "Error", constraints: [] };
+    expr: InfixApplicationExpression,
+    env: Environment
+  ): Result<Type> {
+    const opScheme = this.signatureMap.get(expr.operator.value);
+    if (!opScheme) {
+      return {
+        success: false,
+        error: `Unknown operator: ${expr.operator.value}`,
+      };
     }
 
-    const errorsMessage = `Type mismatch in infix application '${
-      node.operator
-    }': ${formatType(left)} vs ${formatType(right)}`;
-
+    const opType = this.instantiate(opScheme);
     if (
-      !this.tryUnify(opType.inputs[0], left, substitutions, errorsMessage) ||
-      !this.tryUnify(opType.inputs[1], right, substitutions, errorsMessage)
+      opType.type !== "TypeConstructor" ||
+      opType.name !== "->" ||
+      opType.args.length !== 2
     ) {
-      return { type: "SimpleType", value: "Error", constraints: [] };
+      return {
+        success: false,
+        error: `Operator ${expr.operator.value} has invalid type`,
+      };
     }
 
-    return opType.return;
+    const leftResult = this.infer(expr.left.body, env);
+    const rightResult = this.infer(expr.right.body, env);
+
+    if (!leftResult.success) return leftResult;
+    if (!rightResult.success) return rightResult;
+
+    const unifyLeft = this.unify(leftResult.value, opType.args[0]);
+    const unifyRight = this.unify(rightResult.value, opType.args[1]);
+
+    if (!unifyLeft.success || !unifyRight.success) {
+      return {
+        success: false,
+        error: `Type mismatch in infix application: ${expr.operator.value}`,
+      };
+    }
+
+    return { success: true, value: opType.args[1] };
   }
+
   private inferDataExpression(
-    node: DataExpression,
-    symbolMap: Map<string, Type>,
-    substitutions: Substitution
-  ): Type {
-    const ctorType = this.signatureMap.get(node.name.value);
-    if (!ctorType) {
-      this.errors.push(`Unknown constructor: ${node.name.value}`);
-      return { type: "SimpleType", value: "Error", constraints: [] };
+    expr: DataExpression,
+    env: Environment
+  ): Result<Type> {
+    const ctorScheme = this.signatureMap.get(expr.name.value);
+    if (!ctorScheme) {
+      return {
+        success: false,
+        error: `Unknown constructor: ${expr.name.value}`,
+      };
     }
 
-    if (ctorType.type !== "ParameterizedType") {
-      return ctorType;
+    const ctorType = this.instantiate(ctorScheme);
+
+    // Data constructors should be functions
+    if (ctorType.type !== "TypeConstructor" || ctorType.name !== "->") {
+      return { success: true, value: ctorType };
     }
 
-    const argTypes = node.contents.map((a: any) =>
-      this.inferType(a.body, symbolMap, substitutions)
-    );
-    if (argTypes.length !== ctorType.inputs.length) {
-      this.errors.push(
-        `Constructor ${node.name.value} expected ${ctorType.inputs.length} args but got ${argTypes.length}`
-      );
-      return { type: "SimpleType", value: "Error", constraints: [] };
-    }
-    const errorsMessage = `Type mismatch in constructor ${node.name.value}`;
+    // Check arguments
+    let currentType: Type = ctorType;
+    for (const arg of expr.contents) {
+      const argResult = this.infer(arg.expression.body, env);
+      if (!argResult.success) return argResult;
 
-    for (let i = 0; i < argTypes.length; i++) {
-      if (
-        !this.tryUnify(
-          ctorType.inputs[i],
-          argTypes[i],
-          substitutions,
-          errorsMessage
-        )
-      ) {
-        return { type: "SimpleType", value: "Error", constraints: [] };
+      if (currentType.type !== "TypeConstructor" || currentType.name !== "->") {
+        return {
+          success: false,
+          error: `Too many arguments to constructor ${expr.name.value}`,
+        };
+      }
+
+      const unifyResult = this.unify(argResult.value, currentType.args[0]);
+      if (!unifyResult.success) {
+        return {
+          success: false,
+          error: `Argument type mismatch for constructor ${expr.name.value}`,
+        };
+      }
+
+      currentType = currentType.args[1];
+    }
+
+    return { success: true, value: currentType };
+  }
+
+  private inferTuple(expr: TupleExpression, env: Environment): Result<Type> {
+    const elementResults = expr.elements.map((e) => this.infer(e.body, env));
+    const errors = elementResults.filter((r) => !r.success);
+    if (elementResults.every((res) => res.success === true)) {
+      const elementTypes = elementResults.map((r) => r.value);
+      const tupleType: TypeConstructor = {
+        type: "TypeConstructor",
+        name: `Tuple${elementTypes.length}`,
+        args: elementTypes,
+      };
+
+      return { success: true, value: tupleType };
+    } else {
+      return errors[0] as Result<Type>;
+    }
+  }
+
+  private inferCons(expr: ConsExpression, env: Environment): Result<Type> {
+    const headResult = this.infer(expr.head.body, env);
+    const tailResult = this.infer(expr.tail.body, env);
+
+    if (!headResult.success) return headResult;
+    if (!tailResult.success) return tailResult;
+
+    // Tail must be a list
+    if (
+      tailResult.value.type !== "TypeConstructor" ||
+      tailResult.value.name !== "List"
+    ) {
+      return { success: false, error: "Tail of cons must be a list" };
+    }
+
+    // Head must match list element type
+    const elemType = tailResult.value.args[0];
+    const unifyResult = this.unify(headResult.value, elemType);
+
+    if (!unifyResult.success) {
+      return {
+        success: false,
+        error: `Head type doesn't match list element type`,
+      };
+    }
+
+    return tailResult;
+  }
+
+  private inferList(expr: ListPrimitive, env: Environment): Result<Type> {
+    if (expr.elements.length === 0) {
+      // Empty list - polymorphic
+      const elemType = this.freshVar();
+      return {
+        success: true,
+        value: {
+          type: "TypeConstructor",
+          name: "List",
+          args: [elemType],
+        },
+      };
+    }
+
+    // Infer type of first element
+    const firstResult = this.infer(expr.elements[0].body, env);
+    if (firstResult.success === false) return firstResult;
+
+    // Check all elements match first element's type
+    for (let i = 1; i < expr.elements.length; i++) {
+      const elemResult = this.infer(expr.elements[i].body, env);
+      if (elemResult.success === false) return elemResult;
+      const unifyResult = this.unify(elemResult.value, firstResult.value);
+      if (unifyResult.success === false) {
+        return {
+          success: false,
+          error: `List elements must have the same type`,
+        };
       }
     }
 
-    return ctorType.return;
-  }
-  private inferTuple(
-    node: TupleExpression,
-    symbolMap: Map<string, Type>,
-    substitutions: Substitution
-  ): Type {
-    const elementTypes = node.elements.map((e: any) =>
-      this.inferType(e.body, symbolMap, substitutions)
-    );
-    return { type: "TupleType", values: elementTypes, constraints: [] };
-  }
-  private inferCons(
-    node: ConsExpression,
-    symbolMap: Map<string, Type>,
-    substitutions: Substitution
-  ): Type {
-    const headType = this.inferType(node.head.body, symbolMap, substitutions);
-    const tailType = this.inferType(node.tail.body, symbolMap, substitutions);
-
-    if (tailType.type !== "ListType") {
-      this.errors.push(
-        `Right-hand side of cons must be a list. Got: ${formatType(tailType)}`
-      );
-      return { type: "SimpleType", value: "Error", constraints: [] };
-    }
-
-    const errorsMessage = `Type mismatch in cons: head ${formatType(
-      headType
-    )} vs list of ${formatType(tailType.values)}`;
-    if (
-      !this.tryUnify(headType, tailType.values, substitutions, errorsMessage)
-    ) {
-      return { type: "SimpleType", value: "Error", constraints: [] };
-    }
-
-    return { type: "ListType", values: headType, constraints: [] };
-  }
-  private inferComparison(
-    node: ComparisonOperation,
-    symbolMap: Map<string, Type>,
-    substitutions: Substitution
-  ): Type {
-    const left = this.inferType(node.left.body, symbolMap, substitutions);
-    const right = this.inferType(node.right.body, symbolMap, substitutions);
-
-    const errorsMessage = `Comparison operands must match. Got ${formatType(
-      left
-    )} vs ${formatType(right)}`;
-    if (!this.tryUnify(left, right, substitutions, errorsMessage)) {
-      return { type: "SimpleType", value: "Error", constraints: [] };
-    }
-
-    return { type: "SimpleType", value: "YuBoolean", constraints: [] };
-  }
-  private inferStringOp(
-    node: StringOperation,
-    symbolMap: Map<string, Type>,
-    substitutions: Substitution
-  ): Type {
-    const left = this.inferType(node.left.body, symbolMap, substitutions);
-    const right = this.inferType(node.right.body, symbolMap, substitutions);
-    const strType: Type = {
-      type: "SimpleType",
-      value: "YuString",
-      constraints: [],
+    return {
+      success: true,
+      value: {
+        type: "TypeConstructor",
+        name: "List",
+        args: [firstResult.value],
+      },
     };
-
-    const errorsMessage = `String operation requires both operands to be strings. Got ${formatType(
-      left
-    )} and ${formatType(right)}`;
-    if (
-      !this.tryUnify(left, strType, substitutions, errorsMessage) ||
-      !this.tryUnify(right, strType, substitutions, errorsMessage)
-    ) {
-      return { type: "SimpleType", value: "Error", constraints: [] };
-    }
-
-    return strType;
   }
-  private inferLambda(
-    node: Lambda,
-    symbolMap: Map<string, Type>,
-    substitutions: Substitution
-  ): Type {
-    const paramTypes = node.parameters.map((_: any) =>
-      freshTypeVariable(this.typeVarCounter++)
-    );
 
-    const newSymbolMap = new Map(symbolMap);
-    node.parameters.forEach((p: any, i: number) =>
-      newSymbolMap.set(p.name, paramTypes[i])
-    );
+  private inferComparison(
+    expr: ComparisonOperation,
+    env: Environment
+  ): Result<Type> {
+    const leftResult = this.infer(expr.left.body, env);
+    const rightResult = this.infer(expr.right.body, env);
 
-    const bodyType = this.inferType(
-      node.body.body,
-      newSymbolMap,
-      substitutions
-    );
+    if (!leftResult.success) return leftResult;
+    if (!rightResult.success) return rightResult;
+
+    const unifyResult = this.unify(leftResult.value, rightResult.value);
+    if (!unifyResult.success) {
+      return {
+        success: false,
+        error: `Comparison operands must have the same type`,
+      };
+    }
 
     return {
-      type: "ParameterizedType",
-      inputs: paramTypes,
-      return: bodyType,
-      constraints: [],
+      success: true,
+      value: { type: "TypeConstructor", name: "YuBoolean", args: [] },
     };
   }
-  private tryUnify(
-    a: Type,
-    b: Type,
-    substitutions: Substitution,
-    errMsg: string
-  ): boolean {
-    try {
-      const subs = this.unify(a, b);
-      subs.forEach((v, k) => substitutions.set(k, v));
-      return true;
-    } catch {
-      this.errors.push(errMsg);
-      return false;
+
+  private inferStringOp(expr: StringOperation, env: Environment): Result<Type> {
+    const strType: TypeConstructor = {
+      type: "TypeConstructor",
+      name: "YuString",
+      args: [],
+    };
+    const leftResult = this.infer(expr.left.body, env);
+    const rightResult = this.infer(expr.right.body, env);
+
+    if (!leftResult.success) return leftResult;
+    if (!rightResult.success) return rightResult;
+
+    const unifyLeft = this.unify(leftResult.value, strType);
+    const unifyRight = this.unify(rightResult.value, strType);
+
+    if (!unifyLeft.success || !unifyRight.success) {
+      return {
+        success: false,
+        error: `String operation requires string operands`,
+      };
     }
+
+    return { success: true, value: strType };
+  }
+
+  // ===== Helper Functions =====
+
+  private toType(
+    node: YukigoType,
+    typeVarMap: Map<string, TypeVar> = new Map()
+  ): { type: Type; constraints: Map<number, string[]> } {
+    const constraintsMap = new Map<number, string[]>();
+
+    const processNode = (n: YukigoType): Type => {
+      switch (n.type) {
+        case "SimpleType": {
+          if (/^[a-z]/.test(n.value)) {
+            if (!typeVarMap.has(n.value)) {
+              typeVarMap.set(n.value, { ...this.freshVar(), name: n.value });
+            }
+            return typeVarMap.get(n.value);
+          }
+          const primitive = typeMappings[n.value];
+          return {
+            type: "TypeConstructor",
+            name: primitive || n.value,
+            args: [],
+          };
+        }
+        case "ParameterizedType": {
+          // Collect constraints from the signature context
+          for (const c of n.constraints || []) {
+            const param = c.parameters[0];
+            if (param.type === "SimpleType" && /^[a-z]/.test(param.value)) {
+              // Ensure the type var exists
+              processNode(param);
+              const tv = typeVarMap.get(param.value);
+              if (!constraintsMap.has(tv.id)) constraintsMap.set(tv.id, []);
+              constraintsMap.get(tv.id).push(c.name);
+            }
+          }
+          return n.inputs.reduceRight(
+            (acc, input) => ({
+              type: "TypeConstructor",
+              name: "->",
+              args: [processNode(input), acc],
+            }),
+            processNode(n.return)
+          );
+        }
+        case "TupleType":
+          return {
+            type: "TypeConstructor",
+            name: `Tuple${n.values.length}`,
+            args: n.values.map((v) => this.toType(v, typeVarMap).type),
+          };
+
+        case "ListType":
+          return {
+            type: "TypeConstructor",
+            name: "List",
+            args: [this.toType(n.values, typeVarMap).type],
+          };
+
+        default:
+          return this.freshVar();
+      }
+    };
+    const type = processNode(node);
+    return { type, constraints: constraintsMap };
+  }
+
+  private processPatterns(
+    pattern: Pattern,
+    expectedType: Type,
+    env: Environment
+  ) {
+    switch (pattern.type) {
+      case "LiteralPattern": {
+        // Determine the type based on the literal value
+        const value = pattern.name;
+        if (!isYukigoPrimitive(value.type)) {
+          this.errors.push(
+            `Unsupported literal type in pattern: ${value.type}`
+          );
+          break;
+        }
+        let literalType: Type = {
+          type: "TypeConstructor",
+          name: value.type,
+          args: [],
+        };
+
+        const unifyResult = this.unify(literalType, expectedType);
+        if (unifyResult.success === false)
+          this.errors.push(
+            `Literal pattern type mismatch: expected ${this.showType(
+              expectedType
+            )} but found ${this.showType(literalType)}`
+          );
+      }
+      case "VariablePattern": {
+        env.set(pattern.name.value.toString(), {
+          type: "TypeScheme",
+          quantifiers: [],
+          body: expectedType,
+          constraints: new Map(),
+        });
+      }
+      case "WildcardPattern":
+        break;
+      case "ApplicationPattern": {
+        const appCtorScheme = this.signatureMap.get(pattern.symbol.value);
+        if (!appCtorScheme)
+          this.errors.push(`Unknown constructor: ${pattern.symbol.value}`);
+
+        const appCtorType = this.instantiate(appCtorScheme);
+
+        // Handle both curried and non-curried constructor types
+        let currentType = appCtorType;
+        let argIndex = 0;
+
+        const patternTypes = this.getArgumentTypes(appCtorType);
+        patternTypes.forEach((argType, i) => {
+          this.processPatterns(pattern.args[argIndex], argType, env);
+        });
+
+        // Check if we've consumed all expected arguments
+        const unifyResult = this.unify(currentType, expectedType);
+        if (unifyResult.success === false)
+          this.errors.push(
+            `Constructor ${pattern.symbol.value} arguments don't match expected type: ${unifyResult.error}`
+          );
+        break;
+      }
+      case "AsPattern": {
+        if (
+          this.processPatterns(pattern.pattern, expectedType, env) &&
+          pattern.alias.type === "VariablePattern"
+        ) {
+          // Create a fresh flexible variable to store in env
+          let type = expectedType;
+          env.set(pattern.alias.name.value, {
+            type: "TypeScheme",
+            quantifiers: [],
+            body: type,
+            constraints: new Map(),
+          });
+        }
+        break;
+      }
+      case "ConsPattern": {
+        if (
+          expectedType.type !== "TypeConstructor" ||
+          expectedType.name !== "List"
+        ) {
+          this.errors.push(
+            `Pattern expects a list but found non-list type: ${this.showType(
+              expectedType
+            )}`
+          );
+          break;
+        }
+
+        let elemType = expectedType.args[0];
+
+        this.processPatterns(pattern.head, elemType, env);
+
+        // Process tail pattern (which should be a list of the same element type)
+        const tailType: TypeConstructor = {
+          type: "TypeConstructor",
+          name: "List",
+          args: [elemType],
+        };
+
+        this.processPatterns(pattern.tail, tailType, env);
+
+        break;
+      }
+      case "ConstructorPattern":
+        const ctorScheme = this.signatureMap.get(pattern.constructor);
+        if (!ctorScheme) {
+          this.errors.push(`Unknown constructor: ${pattern.constructor}`);
+          break;
+        }
+
+        const ctorType = this.instantiate(ctorScheme);
+        if (ctorType.type !== "TypeConstructor") {
+          this.errors.push(
+            `Constructor ${pattern.constructor} is not a function`
+          );
+          break;
+        }
+
+        // Check if constructor matches expected type
+        const unifyResult = this.unify(ctorType, expectedType);
+        if (!unifyResult.success) {
+          this.errors.push(
+            `Constructor ${pattern.constructor} doesn't match expected type`
+          );
+          break;
+        }
+
+        // Process constructor arguments
+        pattern.patterns.forEach((pattern) => {
+          this.processPatterns(pattern, ctorType.args[0], env);
+        });
+        break;
+      case "ListPattern": {
+        if (
+          expectedType.type !== "TypeConstructor" ||
+          expectedType.name !== "List"
+        ) {
+          this.errors.push(`Pattern expects a list but found non-list type`);
+          return false;
+        }
+
+        const patternTypes = this.getArgumentTypes(expectedType);
+        const elemType = patternTypes[0];
+        patternTypes.every((type) => this.unify(elemType, type));
+
+        break;
+      }
+      case "TuplePattern":
+        if (
+          expectedType.type !== "TypeConstructor" ||
+          expectedType.name !== "Tuple"
+        ) {
+          this.errors.push(`Pattern expects a tuple but found non-tuple type`);
+          break;
+        }
+
+        if (pattern.elements.length !== expectedType.args.length) {
+          this.errors.push(`Tuple arity mismatch`);
+          break;
+        }
+
+        const expectedTypes = this.getArgumentTypes(expectedType);
+        pattern.elements.forEach((pattern, i) =>
+          this.processPatterns(pattern, expectedTypes[i], env)
+        );
+        break;
+      default:
+        this.errors.push(`Unsupported pattern type: ${pattern.type}`);
+        break;
+    }
+  }
+
+  private showType(t: Type): string {
+    if (t.type === "TypeVar") return t.name ?? `t${t.id}`;
+    if (t.type === "TypeConstructor") {
+      if (t.name === "->") {
+        const a = this.showType(t.args[0]);
+        const b = this.showType(t.args[1]);
+        const aDisp =
+          t.args[0].type === "TypeConstructor" && t.args[0].name === "->"
+            ? `(${a})`
+            : a;
+        return `${aDisp} -> ${b}`;
+      }
+      if (t.name === "List") return `[${this.showType(t.args[0])}]`;
+      if (t.name.startsWith("Tuple"))
+        return `(${t.args.map(this.showType.bind(this)).join(", ")})`;
+      return t.args.length
+        ? `${t.name} ${t.args.map(this.showType.bind(this)).join(" ")}`
+        : t.name;
+    }
+    return "scheme";
   }
 }

@@ -87,10 +87,12 @@ infix_operator_expression ->
     application _ "`" _ variable _ "`" _ infix_operator_expression {% (d) => parseInfixApplication([d[4], d[0], d[8]]) %}
     | application {% d => d[0] %}
 
-application -> primary (_ primary):* {% (d) => {
-    if (d[1].length === 0) return d[0];
-    return d[1].reduce((left, right) => parseApplication([left, right[1]]), d[0]);
-} %}
+application -> 
+  "show" _ primary {% (d) => ({ type: "Print", expression: { type: "Expression", body: d[2] } }) %}
+  | primary (_ primary):* {% (d) => {
+      if (d[1].length === 0) return d[0];
+      return d[1].reduce((left, right) => parseApplication([left, right[1]]), d[0]);
+  } %}
 
 operator -> 
     "==" {% (d) => "Equal" %}
@@ -119,6 +121,7 @@ primary ->
     | %char {% (d) => parsePrimary(d[0]) %}
     | %string {% (d) => parsePrimary(d[0]) %}
     | %bool {% (d) => parsePrimary(d[0]) %}
+    #| primitive_operator {% (d) => d[0] %}
     | variable {% (d) => d[0] %}
     | constr {% (d) => d[0] %}
     | tuple_expression {% (d) => d[0] %}
@@ -129,9 +132,7 @@ primary ->
     | composition_expression {% (d) => d[0] %}
     | lambda_expression {% (d) => d[0] %}
     | if_expression {% d => d[0] %}
-    | case_expression {% d => d[0] %}
     | data_expression {% d => d[0] %}
-    | let_in_expression {% d => d[0] %}
     
 # Expression rules
 
@@ -246,30 +247,6 @@ tuple_pattern ->
     elements: [d[2], ...d[3].map(x => x[3])]
   }) %}
 
-# Let in expression
-
-let_in_expression -> 
-  "let" __ let_bindings __ "in" __ expression 
-  {% (d) => ({ type: "LetIn", bindings: d[2], body: d[6] }) %}
-
-let_bindings -> let_binding (__ let_binding):* {% (d) => [d[0], ...d[1].map(x => x[1])] %}
-let_binding -> pattern _ "=" _ expression  {% (d) => ({ pattern: d[0], expr: d[4] }) %}
-
-# Case expression
-
-case_expression -> 
-  "case" __ expression __ "of" __ case_alternatives 
-  {% (d) => ({ type: "CaseExpression", expr: d[2], alts: d[6] }) %}
-
-case_alternatives -> 
-  case_alternative (__ case_alternative):* 
-  {% (d) => [d[0], ...d[1].map(x => x[1])] %}
-
-case_alternative -> 
-  pattern _ "->" _ expression 
-  {% (d) => ({ pattern: d[0], body: d[4] }) %}
-
-
 # Type rules
 
 type_declaration -> "type" __ constr (__ variable_list):? _ "=" _ type {% (d) => typeAlias(d[2].value, d[7], d[3] ? d[3][1] : []) %}
@@ -363,6 +340,9 @@ comparison_operator ->
     | ">" {% (d) => "GreaterThan" %}
     | "<="  {% (d) => "LessOrEqualThan" %}
     | ">=" {% (d) => "GreaterOrEqualThan" %}
+
+primitive_operator -> 
+    "show" {% (d) => "Print" %}
 
 _ -> %WS:*
 
