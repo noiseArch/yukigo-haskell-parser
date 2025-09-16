@@ -33,7 +33,6 @@ import {
     parseApplication, 
     parseExpression, 
     parseCompositionExpression, 
-
     parseFunctionType, 
     parseLambda
 } from "../utils/helpers.js";
@@ -45,6 +44,9 @@ import {
   symbolPrimitive,
   application,
   listType,
+  arithmetic,
+  comparisonOp,
+  listBinaryOp,
   tupleType,
   typeApplication,
   typeCast
@@ -119,23 +121,24 @@ const grammar: Grammar = {
     {"name": "cons_expression", "symbols": ["concatenation"], "postprocess": (d) => d[0]},
     {"name": "concatenation", "symbols": ["comparison", "_", {"literal":"++"}, "_", "concatenation"], "postprocess": (d) => ({ type: "StringOperation", operator: "Concat", left: {type: "Expression", body:d[0]}, right: {type: "Expression", body:d[4]} })},
     {"name": "concatenation", "symbols": ["comparison"], "postprocess": (d) => d[0]},
-    {"name": "comparison", "symbols": ["addition", "_", "comparison_operator", "_", "comparison"], "postprocess": (d) => ({ type: "ComparisonOperation", operator: d[2], left: {type: "Expression", body:d[0]}, right: {type: "Expression", body:d[4]} })},
+    {"name": "comparison", "symbols": ["addition", "_", "comparison_operator", "_", "comparison"], "postprocess": (d) => comparisonOp(d[2], expression(d[0]), expression(d[4]))},
     {"name": "comparison", "symbols": ["addition"], "postprocess": (d) => d[0]},
-    {"name": "addition", "symbols": ["multiplication", "_", {"literal":"+"}, "_", "addition"], "postprocess": (d) => ({ type: "ArithmeticOperation", operator: "Plus", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} })},
-    {"name": "addition", "symbols": ["multiplication", "_", {"literal":"-"}, "_", "addition"], "postprocess": (d) => ({ type: "ArithmeticOperation", operator: "Minus", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} })},
+    {"name": "addition", "symbols": ["multiplication", "_", {"literal":"+"}, "_", "addition"], "postprocess": (d) => arithmetic("Plus", expression(d[0]), expression(d[4]))},
+    {"name": "addition", "symbols": ["multiplication", "_", {"literal":"-"}, "_", "addition"], "postprocess": (d) => arithmetic("Minus", expression(d[0]), expression(d[4]))},
     {"name": "addition", "symbols": ["multiplication"], "postprocess": (d) => d[0]},
-    {"name": "multiplication", "symbols": ["infix_operator_expression", "_", {"literal":"*"}, "_", "multiplication"], "postprocess": (d) => ({ type: "ArithmeticOperation", operator: "Multiply", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} })},
-    {"name": "multiplication", "symbols": ["infix_operator_expression", "_", {"literal":"/"}, "_", "multiplication"], "postprocess": (d) => ({ type: "ArithmeticOperation", operator: "Divide", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} })},
+    {"name": "multiplication", "symbols": ["infix_operator_expression", "_", {"literal":"*"}, "_", "multiplication"], "postprocess": (d) => arithmetic("Multiply", expression(d[0]), expression(d[4]))},
+    {"name": "multiplication", "symbols": ["infix_operator_expression", "_", {"literal":"/"}, "_", "multiplication"], "postprocess": (d) => arithmetic("Divide", expression(d[0]), expression(d[4]))},
     {"name": "multiplication", "symbols": ["infix_operator_expression"], "postprocess": (d) => d[0]},
     {"name": "infix_operator_expression", "symbols": ["application", "_", {"literal":"`"}, "_", "variable", "_", {"literal":"`"}, "_", "infix_operator_expression"], "postprocess": (d) => parseInfixApplication([d[4], d[0], d[8]])},
     {"name": "infix_operator_expression", "symbols": ["application"], "postprocess": d => d[0]},
-    {"name": "application", "symbols": [{"literal":"show"}, "_", "primary"], "postprocess": (d) => ({ type: "Print", expression: { type: "Expression", body: d[2] } })},
+    {"name": "application", "symbols": [{"literal":"show"}, "_", "primary"], "postprocess": (d) => ({ type: "Print", expression: expression(d[2]) })},
+    {"name": "application", "symbols": [{"literal":"map"}, "_", "primary", "_", "primary"], "postprocess": (d) => listBinaryOp("Collect", expression(d[2]), expression(d[4]))},
     {"name": "application$ebnf$1", "symbols": []},
     {"name": "application$ebnf$1$subexpression$1", "symbols": ["_", "primary"]},
     {"name": "application$ebnf$1", "symbols": ["application$ebnf$1", "application$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
     {"name": "application", "symbols": ["primary", "application$ebnf$1"], "postprocess":  (d) => {
             if (d[1].length === 0) return d[0];
-            return d[1].reduce((left, right) => parseApplication([left, right[1]]), d[0]);
+            return d[1].reduce((left, right) => application(expression(left), expression(right[1])), d[0]);
         } },
     {"name": "operator", "symbols": [{"literal":"=="}], "postprocess": (d) => "Equal"},
     {"name": "operator", "symbols": [{"literal":"/="}], "postprocess": (d) => "NotEqual"},
@@ -164,7 +167,7 @@ const grammar: Grammar = {
     {"name": "primary", "symbols": ["tuple_expression"], "postprocess": (d) => d[0]},
     {"name": "primary", "symbols": ["left_section"], "postprocess": (d) => d[0]},
     {"name": "primary", "symbols": ["right_section"], "postprocess": (d) => d[0]},
-    {"name": "primary", "symbols": [{"literal":"("}, "_", "expression", "_", {"literal":")"}], "postprocess": (d) => d[2]},
+    {"name": "primary", "symbols": [{"literal":"("}, "_", "type_cast", "_", {"literal":")"}], "postprocess": (d) => d[2]},
     {"name": "primary", "symbols": ["list_literal"], "postprocess": (d) => parsePrimary({type: "list", body: d[0].elements, start: d[0].start, end: d[0].end })},
     {"name": "primary", "symbols": ["composition_expression"], "postprocess": (d) => d[0]},
     {"name": "primary", "symbols": ["lambda_expression"], "postprocess": (d) => d[0]},

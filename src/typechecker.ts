@@ -7,7 +7,7 @@ import {
   TypeAlias,
   Pattern,
   TypeSignature,
-  ArithmeticOperation,
+  ArithmeticBinaryOperation,
   ListPrimitive,
   SymbolPrimitive,
   CompositionExpression,
@@ -22,9 +22,9 @@ import {
   Lambda,
   Primitive,
   Equation,
-  Constraint as YukigoConstraint,
   Type as YukigoType,
   isYukigoPrimitive,
+  ListBinaryOperation,
 } from "yukigo-core";
 import { typeClasses, typeMappings } from "./utils/types.js";
 import { inspect } from "util";
@@ -151,7 +151,6 @@ export class TypeChecker {
         const typeVarMap = new Map<string, TypeVar>();
         const { type, constraints } = this.toType(node.body, typeVarMap);
         const quantifiers = Array.from(typeVarMap.values()).map((tv) => tv.id);
-        // Signatures are already generalized by the user
         this.signatureMap.set(functionName, {
           type: "TypeScheme",
           quantifiers,
@@ -320,7 +319,6 @@ export class TypeChecker {
     });
   }
 
-  // Core HM algorithm - Algorithm W
   private infer(expr: BodyExpression, env: Environment): Result<Type> {
     switch (expr.type) {
       case "YuChar":
@@ -333,7 +331,7 @@ export class TypeChecker {
       case "YuSymbol":
         return this.inferSymbol(expr, env);
 
-      case "ArithmeticOperation":
+      case "ArithmeticBinaryOperation":
         return this.inferArithmetic(expr, env);
 
       case "If":
@@ -365,6 +363,8 @@ export class TypeChecker {
 
       case "StringOperation":
         return this.inferStringOp(expr, env);
+      case "ListBinaryOperation":
+        return this.inferListBinaryOp(expr, env);
 
       default:
         return {
@@ -549,7 +549,7 @@ export class TypeChecker {
   }
 
   private inferArithmetic(
-    expr: ArithmeticOperation,
+    expr: ArithmeticBinaryOperation,
     env: Environment
   ): Result<Type> {
     const numType: TypeConstructor = {
@@ -962,6 +962,78 @@ export class TypeChecker {
     }
 
     return { success: true, value: strType };
+  }
+  private inferListBinaryOp(
+    expr: ListBinaryOperation,
+    env: Environment
+  ): Result<Type> {
+    switch (expr.operator) {
+      case "Collect": {
+        const leftResult = this.infer(expr.left.body, env);
+        const rightResult = this.infer(expr.right.body, env);
+
+        if (!leftResult.success) return leftResult;
+        if (!rightResult.success) return rightResult;
+
+        const funcArity = this.getArity(leftResult.value);
+        if (funcArity !== 1)
+          return {
+            success: false,
+            error: `${expr.operator}'s left operand expects to have only one argument`,
+          };
+
+        // Right-hand side must be a list [a]
+        const freshInputVar = this.freshVar();
+        const listInputType: TypeConstructor = {
+          type: "TypeConstructor",
+          name: "List",
+          args: [freshInputVar],
+        };
+
+        const unifyRight = this.unify(rightResult.value, listInputType);
+        if (!unifyRight.success)
+          return {
+            success: false,
+            error: `${expr.operator}'s right operand must be a list`,
+          };
+
+        const elementType = unifyRight.value.get(freshInputVar.id);
+
+        // Left-hand side must be a function: elementType -> outputType
+        const freshOutputVar = this.freshVar();
+        const funcType: TypeConstructor = {
+          type: "TypeConstructor",
+          name: "->",
+          args: [elementType, freshOutputVar],
+        };
+
+        const unifyLeft = this.unify(leftResult.value, funcType);
+        if (!unifyLeft.success) {
+          return {
+            success: false,
+            error: `${
+              expr.operator
+            }'s left operand must be a function of type ${elementType.toString()} -> ?`,
+          };
+        }
+
+        // Result is a list of the function's output type: [outputType]
+
+        const resultType: TypeConstructor = {
+          type: "TypeConstructor",
+          name: "List",
+          args: [freshOutputVar],
+        };
+
+        const subType = this.applySubst(unifyLeft.value, resultType);
+
+        // Return the result type, now fully resolved with substitutions
+        return { success: true, value: subType };
+      }
+
+      default:
+        break;
+    }
   }
 
   // ===== Helper Functions =====

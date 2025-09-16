@@ -4,11 +4,14 @@ import { inspect } from "util";
 
 import {
   application,
+  arithmetic,
   charPrimitive,
   constraint,
   equation,
   expression,
   func,
+  lambda,
+  listBinaryOp,
   ListType,
   listType,
   literalPattern,
@@ -22,6 +25,7 @@ import {
   typeCon,
   typeSig,
   unguardedbody,
+  varPattern,
 } from "yukigo-core";
 
 describe("Parser Tests", () => {
@@ -192,6 +196,142 @@ describe("Parser Tests", () => {
   it("parses chars as YuChars", () => {
     assert.deepEqual(parser.parse("x = 'a'"), [
       func("x", equation([], unguardedbody(expression(charPrimitive("'a'"))))),
+    ]);
+  });
+  it("parses primitive operator map with lambda", () => {
+    const code = `f :: [Int] -> [Int]\nf xs = map (\\x -> x * 2) xs`;
+    const ast = parser.parse(code);
+    console.log(inspect(ast, false, null, true));
+    assert.deepEqual(ast, [
+      typeSig(
+        "f",
+        [listType(typeCon("Int", []), [])],
+        listType(typeCon("Int", []), []),
+        []
+      ),
+      func(
+        "f",
+        equation(
+          [varPattern(symbolPrimitive("xs"))],
+          unguardedbody(
+            expression(
+              listBinaryOp(
+                "Collect",
+                expression(
+                  lambda(
+                    [varPattern(symbolPrimitive("x"))],
+                    expression(
+                      arithmetic(
+                        "Multiply",
+                        expression(symbolPrimitive("x")),
+                        expression(numberPrimitive(2))
+                      )
+                    )
+                  )
+                ),
+                expression(symbolPrimitive("xs"))
+              )
+            )
+          )
+        )
+      ),
+    ]);
+  });
+  it("parses primitive operator map with function", () => {
+    const code = `f :: [Int] -> [Int]\nf xs = map double xs`;
+    const ast = parser.parse(code);
+    assert.deepEqual(ast, [
+      typeSig(
+        "f",
+        [listType(typeCon("Int", []), [])],
+        listType(typeCon("Int", []), []),
+        []
+      ),
+      func(
+        "f",
+        equation(
+          [varPattern(symbolPrimitive("xs"))],
+          unguardedbody(
+            expression(
+              listBinaryOp(
+                "Collect",
+                expression(symbolPrimitive("double")),
+                expression(symbolPrimitive("xs"))
+              )
+            )
+          )
+        )
+      ),
+    ]);
+  });
+  it("parses primitive operator map with partial application", () => {
+    const code = `f :: [Int] -> [Int]\nf xs = map (multiply 2) xs`;
+    const ast = parser.parse(code);
+    assert.deepEqual(ast, [
+      typeSig(
+        "f",
+        [listType(typeCon("Int", []), [])],
+        listType(typeCon("Int", []), []),
+        []
+      ),
+      func(
+        "f",
+        equation(
+          [varPattern(symbolPrimitive("xs"))],
+          unguardedbody(
+            expression(
+              listBinaryOp(
+                "Collect",
+                expression(
+                  application(
+                    expression(symbolPrimitive("multiply")),
+                    expression(numberPrimitive(2))
+                  )
+                ),
+                expression(symbolPrimitive("xs"))
+              )
+            )
+          )
+        )
+      ),
+    ]);
+  });
+  it("parses primitive operator map with infix partial application", () => {
+    const code = `f :: [Int] -> [Int]\nf xs = map (* 2) xs`;
+    const ast = parser.parse(code);
+    console.log(inspect(ast, false, null, true));
+    assert.deepEqual(ast, [
+      typeSig(
+        "f",
+        [listType(typeCon("Int", []), [])],
+        listType(typeCon("Int", []), []),
+        []
+      ),
+      func(
+        "f",
+        equation(
+          [varPattern(symbolPrimitive("xs"))],
+          unguardedbody(
+            expression(
+              listBinaryOp(
+                "Collect",
+                expression(
+                  application(
+                    expression(symbolPrimitive("flip")),
+                    expression(
+                      application(
+                        expression(symbolPrimitive("Multiply")),
+                        expression(numberPrimitive(2))
+                      )
+                    )
+                  )
+                ),
+                expression(symbolPrimitive("xs"))
+              )
+            )
+          )
+        )
+      ),
     ]);
   });
 });

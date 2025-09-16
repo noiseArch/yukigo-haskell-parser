@@ -10,7 +10,6 @@ import {
     parseApplication, 
     parseExpression, 
     parseCompositionExpression, 
-
     parseFunctionType, 
     parseLambda
 } from "../utils/helpers.js";
@@ -22,6 +21,9 @@ import {
   symbolPrimitive,
   application,
   listType,
+  arithmetic,
+  comparisonOp,
+  listBinaryOp,
   tupleType,
   typeApplication,
   typeCast
@@ -70,17 +72,17 @@ concatenation ->
     | comparison {% (d) => d[0] %}
 
 comparison ->
-    addition _ comparison_operator _ comparison {% (d) => ({ type: "ComparisonOperation", operator: d[2], left: {type: "Expression", body:d[0]}, right: {type: "Expression", body:d[4]} }) %}
+    addition _ comparison_operator _ comparison {% (d) => comparisonOp(d[2], expression(d[0]), expression(d[4])) %}
     | addition {% (d) => d[0] %}
 
 addition -> 
-    multiplication _ "+" _ addition {% (d) => ({ type: "ArithmeticOperation", operator: "Plus", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} }) %}
-    | multiplication _ "-" _ addition {% (d) => ({ type: "ArithmeticOperation", operator: "Minus", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} }) %}
+    multiplication _ "+" _ addition {% (d) => arithmetic("Plus", expression(d[0]), expression(d[4])) %}
+    | multiplication _ "-" _ addition {% (d) => arithmetic("Minus", expression(d[0]), expression(d[4])) %}
     | multiplication {% (d) => d[0] %}
 
 multiplication ->
-    infix_operator_expression _ "*" _ multiplication {% (d) => ({ type: "ArithmeticOperation", operator: "Multiply", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} }) %}
-    | infix_operator_expression _ "/" _ multiplication {% (d) => ({ type: "ArithmeticOperation", operator: "Divide", left: {type: "Expression", body: d[0]}, right: {type: "Expression", body: d[4]} }) %}
+    infix_operator_expression _ "*" _ multiplication {% (d) => arithmetic("Multiply", expression(d[0]), expression(d[4])) %}
+    | infix_operator_expression _ "/" _ multiplication {% (d) => arithmetic("Divide", expression(d[0]), expression(d[4])) %}
     | infix_operator_expression {% (d) => d[0] %}
 
 infix_operator_expression ->
@@ -88,10 +90,11 @@ infix_operator_expression ->
     | application {% d => d[0] %}
 
 application -> 
-  "show" _ primary {% (d) => ({ type: "Print", expression: { type: "Expression", body: d[2] } }) %}
+  "show" _ primary {% (d) => ({ type: "Print", expression: expression(d[2]) }) %}
+  | "map" _ primary _ primary {% (d) => listBinaryOp("Collect", expression(d[2]), expression(d[4])) %}
   | primary (_ primary):* {% (d) => {
       if (d[1].length === 0) return d[0];
-      return d[1].reduce((left, right) => parseApplication([left, right[1]]), d[0]);
+      return d[1].reduce((left, right) => application(expression(left), expression(right[1])), d[0]);
   } %}
 
 operator -> 
@@ -127,7 +130,7 @@ primary ->
     | tuple_expression {% (d) => d[0] %}
     | left_section {% (d) => d[0] %}
     | right_section {% (d) => d[0] %}
-    | "(" _ expression _ ")" {% (d) => d[2] %}
+    | "(" _ type_cast _ ")" {% (d) => d[2] %} # This handles (expression) but is (type_cast) to prevent having unnecessary nested Expressions
     | list_literal {% (d) => parsePrimary({type: "list", body: d[0].elements, start: d[0].start, end: d[0].end }) %}
     | composition_expression {% (d) => d[0] %}
     | lambda_expression {% (d) => d[0] %}

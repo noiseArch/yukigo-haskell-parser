@@ -132,7 +132,21 @@ describe("TypeChecker Tests", () => {
       "Type error in 'f': Cannot apply YuNumber to function of type YuString -> Foo t1"
     );
   });
-
+  it("validates correct usage of primitive operator map", () => {
+    const code = `f :: [Int] -> [Int]\nf xs = map (\\x -> x * 2) xs`;
+    parser.parse(code);
+    assert.isEmpty(parser.errors);
+  });
+  it("detects incorrect usage of primitive operator map", () => {
+    const code = `f :: [Int] -> [Int]\nf xs = map (\\x -> x ++ "2") xs`;
+    parser.parse(code);
+    assert.include(parser.errors, "Type error in 'f': Cannot unify YuString with YuNumber");
+  });
+  it("detects incorrect arity in left operand of primitive operator map", () => {
+    const code = `f :: [Int] -> [Int]\nf xs = map (\\x y -> x + 2) xs`;
+    parser.parse(code);
+    assert.include(parser.errors, "Type error in 'f': Collect's left operand expects to have only one argument");
+  });
   it("handles multiple type errors", () => {
     const code = `f :: Int -> String\nf x = x + "error"\ng = 42`;
     parser.parse(code);

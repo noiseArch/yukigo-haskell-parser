@@ -70,7 +70,8 @@ export const HaskellLexerConfig = {
     type: moo.keywords({
       keyword: keywords,
       primitiveOperator: [
-        "show"
+        "show",
+        "map"
       ],
     }),
   },
