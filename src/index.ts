@@ -1,8 +1,9 @@
 import grammar from "./parser/grammar.js";
 import nearley from "nearley";
 import { groupFunctionDeclarations } from "./utils/helpers.js";
-import { TypeChecker } from "./typechecker.js";
+import { TypeChecker } from "./typechecker/checker.js";
 import { AST, YukigoParser } from "yukigo-core";
+import { inspect } from "util";
 
 // This is the final parser that Yukigo accepts.
 // every parser NEEDS to expose a 'parse' method/function and an array of errors
@@ -33,10 +34,14 @@ export class YukigoHaskellParser implements YukigoParser {
       throw Error("Parser did not generate an AST.");
     }
     const groupedAst = groupFunctionDeclarations(parser.results[0]);
-    const typeChecker = new TypeChecker();
-    const errors = typeChecker.check(groupedAst);
-    if (errors.length > 0) {
-      this.errors.push(...errors);
+    try {
+      const typeChecker = new TypeChecker();
+      const errors = typeChecker.check(groupedAst);
+      if (errors.length > 0) {
+        this.errors.push(...errors);
+      }
+    } catch (error) {
+      console.log(error)
     }
     return groupedAst;
   }

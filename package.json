@@ -11,8 +11,7 @@
   },
   "scripts": {
     "build": "nearleyc ./src/parser/grammar.ne -o ./src/parser/grammar.ts && tsc",
-    "test": "nearleyc ./src/parser/grammar.ne -o ./src/parser/grammar.ts && tsc && mocha",
-    "prepare": "npm run build"
+    "test": "npm run build && mocha"
   },
   "keywords": [],
   "author": "",

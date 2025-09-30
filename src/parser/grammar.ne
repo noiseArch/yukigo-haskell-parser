@@ -1,7 +1,6 @@
 @{%
 import { HSLexer } from "./lexer.js"
 import { 
-    parseFunction, 
     parsePrimary, 
     parseDataExpression,
     parseConditional, 
@@ -22,8 +21,19 @@ import {
   application,
   listType,
   arithmetic,
+  arithmeticUnary,
+  func,
+  equation,
+  sequence,
+  guardedbody,
+  unguardedbody,
+  returnExpr,
   comparisonOp,
   listBinaryOp,
+  listUnaryOp,
+  logicalBinaryOperation,
+  variable as variableExpr,
+  otherwise,
   tupleType,
   typeApplication,
   typeCast
@@ -68,7 +78,12 @@ cons_expression ->
     | concatenation {% (d) => d[0] %}
 
 concatenation ->
-    comparison _ "++" _ concatenation {% (d) => ({ type: "StringOperation", operator: "Concat", left: {type: "Expression", body:d[0]}, right: {type: "Expression", body:d[4]} }) %}
+    logical_expression _ "++" _ concatenation {% (d) => ({ type: "StringOperation", operator: "Concat", left: expression(d[0]), right: expression(d[4]) }) %}
+    | logical_expression {% (d) => d[0] %}
+
+logical_expression ->
+    comparison _ "&&" _ logical_expression {%  (d) => logicalBinaryOperation("And", expression(d[0]), expression(d[4])) %}
+    | comparison _ "||" _ logical_expression {%  (d) => logicalBinaryOperation("Or", expression(d[0]), expression(d[4])) %}
     | comparison {% (d) => d[0] %}
 
 comparison ->
@@ -76,8 +91,14 @@ comparison ->
     | addition {% (d) => d[0] %}
 
 addition -> 
-    multiplication _ "+" _ addition {% (d) => arithmetic("Plus", expression(d[0]), expression(d[4])) %}
-    | multiplication _ "-" _ addition {% (d) => arithmetic("Minus", expression(d[0]), expression(d[4])) %}
+    power _ "+" _ addition {% (d) => arithmetic("Plus", expression(d[0]), expression(d[4])) %}
+    | power _ "-" _ addition {% (d) => arithmetic("Minus", expression(d[0]), expression(d[4])) %}
+    | power {% (d) => d[0] %}
+
+power -> 
+    multiplication _ "**" _ power {% (d) => arithmetic("Power", expression(d[0]), expression(d[4])) %}
+    | multiplication _ "^" _ power {% (d) => arithmetic("Power", expression(d[0]), expression(d[4])) %}
+    | multiplication _ "^^" _ power {% (d) => arithmetic("Power", expression(d[0]), expression(d[4])) %}
     | multiplication {% (d) => d[0] %}
 
 multiplication ->
@@ -91,11 +112,41 @@ infix_operator_expression ->
 
 application -> 
   "show" _ primary {% (d) => ({ type: "Print", expression: expression(d[2]) }) %}
-  | "map" _ primary _ primary {% (d) => listBinaryOp("Collect", expression(d[2]), expression(d[4])) %}
+  | binary_list_operator _ primary _ primary {% (d) => listBinaryOp(d[0], expression(d[2]), expression(d[4])) %}
+  | unary_list_operator _ primary {% (d) => listUnaryOp(d[0], expression(d[2])) %}
+  | binary_arithmetic_operator _ primary _ primary {% (d) => arithmetic(d[0], expression(d[2]), expression(d[4])) %}
+  | unary_arithmetic_operator _ primary {% (d) => arithmeticUnary(d[0], expression(d[2])) %}
   | primary (_ primary):* {% (d) => {
       if (d[1].length === 0) return d[0];
       return d[1].reduce((left, right) => application(expression(left), expression(right[1])), d[0]);
   } %}
+
+binary_arithmetic_operator -> 
+  "max" {% d => "Max" %}
+  | "min" {% d => "Min" %}
+
+unary_arithmetic_operator -> 
+  "round" {% d => "Round" %}
+  | "abs" {% d => "Absolute" %}
+  | "ceiling" {% d => "Ceil" %}
+  | "floor" {% d => "Floor" %}
+  | "sqrt" {% d => "Sqrt" %}
+
+binary_list_operator -> 
+  "map" {% d => "Collect" %}
+  | "filter" {% d => "Select" %}
+  | "all" {% d => "AllSatisfy" %}
+  | "any" {% d => "AnySatisfy" %}
+  | "find" {% d => "Detect" %}
+  | "foldl" {% d => "Inject" %}
+  | "foldl1" {% d => "Inject" %}
+  | "foldr" {% d => "Inject" %}
+  | "foldr1" {% d => "Inject" %}
+
+unary_list_operator -> 
+  "max" {% d => "DetectMax" %}
+  | "min" {% d => "DetectMin" %}
+  | "length" {% d => "Size" %}
 
 operator -> 
     "==" {% (d) => "Equal" %}
@@ -153,7 +204,8 @@ fields_expressions -> field_exp (_ "," _ field_exp):* {% (d) => [d[0], ...d[1].m
 
 field_exp -> variable _ "=" _ expression {% (d) => ({type: "FieldExpression", name: d[0], expression: d[4]}) %}
 
-if_expression -> "if" _ expression _ (%NL):? _ "then" _ expression _ (%NL):? _ "else" _ expression {% (d) => parseConditional([d[2], d[8], d[14]]) %}
+if_expression -> 
+  "if" (__ | (_ %NL _)) expression (__ | (_ %NL _)) "then" (__ | (_ %NL __)) expression (__ | (_ %NL _)) "else" (__ | (_ %NL __)) expression {% (d) => parseConditional([d[2], d[6], d[10]]) %}
 
 # Data rules
 
@@ -171,13 +223,36 @@ field -> variable _ %typeEquals _ type {% (d) => ({type: "Field", name: d[0], va
 
 function_type_declaration -> variable _ %typeEquals _ type {% (d) => parseFunctionType([d[0], d[4]]) %}
 
-function_declaration -> 
-    variable __ parameter_list:? _ (%NL __):? guarded_rhs {% (d) => parseFunction({type: "Function", name: d[0], params: d[2] ? d[2] : [], body: d[5], attributes: ["GuardedBody"]}) %}
-    | variable __ parameter_list:? _ %assign _ (%NL __):? expression _ EOL {% (d) => parseFunction({type: "Function", name: d[0], params: d[2] ? d[2] : [], body: d[7], attributes: ["UnguardedBody"]}) %}
+function_declaration -> variable equation _ EOL {% (d) => func(d[0].value, d[1]) %}
 
-guarded_rhs -> guarded_branch:+ {% (d) => d[0] %}
+return_expression -> expression {% d => returnExpr(d[0]) %}
 
-guarded_branch -> "|" _ expression _ "=" _ expression _ ((%NL __) | EOL) {% (d) => ({ condition: d[2], body: d[6] }) %}
+where_clause -> "where" ((_ %NL __) | _) definition_list {% d => d[2] %}
+
+definition_list -> 
+  definition {% d => [d[0]] %}
+  | definition ((_ %NL __) | (_ ";" _)) definition_list {% d => [d[0], ...d[2]] %}
+
+definition -> variable equation {% d => func(d[0].value, d[1]) %}
+
+equation -> 
+  params (%NL __):? guarded_rhs {% d => equation(d[0], d[2]) %}
+  | params %assign ((_ %NL __) | _) return_expression (((_ %NL __) | _) where_clause):? {% d => equation(d[0], unguardedbody(sequence(d[4] ? [...d[4][1], d[3]] : [d[3]])), d[3]) %}
+
+params ->
+  __ parameter_list _ {% d => d[1] %}
+  | _ {% d => [] %}
+
+guarded_rhs -> 
+  guarded_branch ((_ %NL __) | _) guarded_rhs {% (d) => [d[0], ...d[2]] %}
+  | guarded_branch {% (d) => [d[0]] %}
+
+guarded_branch -> 
+  "|" ((_ %NL __) | _) condition ((_ %NL __) | _) "=" ((_ %NL __) | _) expression {% (d) => guardedbody(d[2], d[6]) %}
+
+condition -> 
+  "otherwise" {% d => expression(otherwise()) %}
+  | expression {% d => d[0] %}
 
 parameter_list -> pattern (__ pattern):* {% (d) => [d[0], ...d[1].map(x => x[1])] %}
 
@@ -185,12 +260,20 @@ parameter_list -> pattern (__ pattern):* {% (d) => [d[0], ...d[1].map(x => x[1])
 
 pattern -> cons_pattern {% (d) => d[0] %}
 
-cons_pattern -> 
-  simple_pattern _ ":" _ cons_pattern {% (d) => ({
-    type: "ConsPattern",
-    head: d[0],
-    tail: d[4]
-  }) %}
+cons_pattern ->
+  "(" _ cons_pattern (_ ":" _ cons_pattern):+ _ ")"  {% 
+    (d) => {
+      const patterns = [d[2], ...d[3].map(item => item[3])];
+      return patterns.reduceRight((tail, head, index, arr) => {
+        if (index === arr.length - 1) return tail;
+        return {
+          type: "ConsPattern",
+          head: head,
+          tail: tail
+        };
+      });
+    }
+  %}
   | simple_pattern {% (d) => d[0] %}
 
 simple_pattern ->

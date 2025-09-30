@@ -1,6 +1,7 @@
 import moo from "moo";
 import { keywords } from "../utils/types.js";
 import { makeLexer } from "moo-ignore";
+
 export const HaskellLexerConfig = {
   EOF: "*__EOF__*",
   anonymousVariable: "_",
@@ -68,10 +69,27 @@ export const HaskellLexerConfig = {
   variable: {
     match: /[a-z_][a-zA-Z0-9_']*/,
     type: moo.keywords({
+      otherwise: "otherwise",
       keyword: keywords,
       primitiveOperator: [
         "show",
-        "map"
+        "map",
+        "filter",
+        "all",
+        "any",
+        "find",
+        "foldl",
+        "foldl1",
+        "foldr",
+        "foldr1",
+        "max",
+        "min",
+        "round",
+        "abs",
+        "ceiling",
+        "floor",
+        "sqrt",
+        "length",
       ],
     }),
   },

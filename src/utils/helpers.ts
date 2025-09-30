@@ -1,3 +1,4 @@
+import { inspect } from "util";
 import {
   AST,
   BodyExpression,
@@ -14,6 +15,12 @@ import {
   Record as RecordNode,
   StringPrimitive,
   SymbolPrimitive,
+  guardedbody,
+  unguardedbody,
+  equation,
+  func,
+  sequence,
+  returnExpr,
 } from "yukigo-core";
 import {
   CompositionExpression,
@@ -47,40 +54,21 @@ interface ListToken {
 
 type Token = BaseMooToken | ListToken;
 
-interface TempUnguardedFunction {
-  type: "Function";
-  name: SymbolPrimitive;
-  parameters: Pattern[];
-  body: Expression;
-  return: Expression;
-  attributes: string[];
-}
-interface TempGuardedFunction {
-  type: "Function";
-  name: SymbolPrimitive;
-  parameters: Pattern[];
-  body: { body: Expression; condition: Expression }[];
-  return: Expression;
-  attributes: string[];
-}
-type TempFunction = TempGuardedFunction | TempUnguardedFunction;
-function parseFunction(token: {
-  type: "Function";
-  name: SymbolPrimitive;
-  params: Pattern[];
-  body: Expression;
-  attributes: string[];
-}): TempFunction {
-  //console.log("Function", inspect(token, false, null, true));
+/* function parseFunction(
+  name: SymbolPrimitive,
+  params: Pattern[],
+  body: Expression[],
+  attributes: string[]
+): TempFunction {
   return {
     type: "Function",
-    name: token.name,
-    parameters: token.params,
-    body: token.body,
-    return: token.body,
-    attributes: token.attributes,
+    name,
+    parameters: params,
+    body,
+    return: body,
+    attributes,
   };
-}
+} */
 
 function parseFunctionType(token: [SymbolPrimitive, Type]): TypeSignature {
   return {
@@ -220,15 +208,15 @@ function parsePrimary(token: Token): Primitive {
 // Serious doubts with this function
 // Final AST should be... AST (no pun intended) not ASTGrouped
 export function groupFunctionDeclarations(
-  ast: Omit<AST, "Function"> & TempFunction
+  ast: Omit<AST, "Function"> & Function
 ): AST {
-  const groups: Record<string, TempFunction[]> = {};
+  const groups: Record<string, Function[]> = {};
   const others: AST = [];
 
   for (const node of ast) {
     if (node.type == "Function") {
-      const func = node as unknown as TempFunction;
-      const name = func.name.value;
+      const func = node as unknown as Function;
+      const name = func.identifier.value;
       if (!groups[name]) groups[name] = [];
       groups[name].push(func);
     } else {
@@ -236,36 +224,17 @@ export function groupFunctionDeclarations(
     }
   }
   const functionGroups: Function[] = Object.entries(groups).map(
-    ([, contents]) => ({
-      type: "Function",
-      identifier: contents[0].name,
-      equations: contents.map((func: TempFunction) => ({
-        type: "Equation",
-        patterns: func.parameters,
-        body: isGuardedBody(func)
-          ? func.body.map((guard) => ({ type: "GuardedBody", ...guard }))
-          : { type: "UnguardedBody", expression: func.body },
-      })),
-    })
+    ([, functions]) =>
+      func(
+        functions[0].identifier.value,
+        ...functions.flatMap((func: Function) => func.equations)
+      )
   );
 
   return [...others, ...functionGroups];
 }
 
-export function isGuardedBody(
-  declaration: Omit<TempFunction, "name" | "type">
-): declaration is TempGuardedFunction {
-  return declaration.attributes.includes("GuardedBody");
-}
-
-export function isUnguardedBody(
-  declaration: Omit<TempFunction, "name" | "type">
-): declaration is TempUnguardedFunction {
-  return declaration.attributes.includes("UnguardedBody");
-}
-
 export {
-  parseFunction,
   parsePrimary,
   parseExpression,
   parseConditional,
